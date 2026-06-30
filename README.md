@@ -2,8 +2,7 @@
 
 一个基于 **PyQt6** 的桌面悬浮窗工具，实时监控 A股（沪深）股票行情，每只股票一行，显示**名称 · 代码 · 现价 · 涨跌幅 · 迷你分时图**。
 
-![界面预览](docs/preview.png)
-
+![界面预览](image.png)
 ---
 
 ## 功能特点
@@ -121,8 +120,10 @@ stock-watching/
 │   ├── __init__.py
 │   └── fetcher.py         # 行情获取（新浪 API + akshare）
 │
-├── dist/                  # 打包输出目录
-└── venv/                  # Python 虚拟环境
+├── .gitignore             # Git 忽略规则（build/、dist/、venv/ 等）
+├── build/                 # 打包临时文件（已 gitignore）
+├── dist/                  # 打包输出目录（已 gitignore）
+└── venv/                  # Python 虚拟环境（已 gitignore）
 ```
 
 ## 技术栈
