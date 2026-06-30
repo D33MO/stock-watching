@@ -1,17 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
-
-
 from PyInstaller.utils.hooks import collect_data_files
+
+datas = [('config.json', '.'), ('logo.ico', '.'), ('logo.png', '.')]
+datas += collect_data_files('akshare')
+
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[
-        ('config.json', '.'),
-        # 打包 akshare 的数据文件（calendar.json）
-        *collect_data_files('akshare'),
-    ],
+    datas=datas,
     hiddenimports=['akshare', 'pyqtgraph', 'PyQt6', 'PyQt6.QtWidgets', 'PyQt6.QtGui', 'PyQt6.QtCore'],
     hookspath=[],
     hooksconfig={},
@@ -41,4 +39,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['logo.ico'],
 )
