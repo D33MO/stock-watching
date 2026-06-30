@@ -135,32 +135,24 @@ def fetch_kline(stock: StockData, days: int = 30) -> bool:
 
 
 def fetch_stock_name(code: str) -> str:
-    """通过股票代码获取股票名称"""
+    """通过股票代码获取股票名称（新浪财经API）"""
     try:
-        # 方法1：stock_individual_info_em
-        df = ak.stock_individual_info_em(symbol=code)
-        if df is not None and not df.empty:
-            # 找到股票名称行
-            name_row = df[df["item"] == "股票简称"]
-            if not name_row.empty:
-                result = str(name_row.iloc[0]["value"])
-                if result and result != code:
-                    return result
-    except Exception:
-        traceback.print_exc()
+        prefix = get_market_prefix(code)
+        url = f"https://hq.sinajs.cn/list={prefix}{code}"
+        headers = {
+            "Referer": "https://finance.sina.com.cn",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        resp = requests.get(url, headers=headers, timeout=5)
+        resp.encoding = "gbk"
+        text = resp.text.strip()
 
-    try:
-        # 方法2：stock_info_a_code_name
-        df2 = ak.stock_info_a_code_name()
-        if df2 is not None and not df2.empty:
-            match_row = df2[df2["code"] == code]
-            if not match_row.empty:
-                result = str(match_row.iloc[0]["name"]).strip()
-                # 去掉末尾的X/x
-                while result.endswith("X") or result.endswith("x"):
-                    result = result[:-1]
-                if result and result != code:
-                    return result
+        # 格式: var hq_str_sh600519="贵州茅台,开盘,昨收,...";
+        match = re.search(r'"(.+)"', text)
+        if match:
+            fields = match.group(1).split(",")
+            if fields[0]:
+                return fields[0].strip()
     except Exception:
         traceback.print_exc()
 

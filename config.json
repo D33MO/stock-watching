@@ -1,17 +1,13 @@
 {
     "stocks": [
         {
-            "code": "600519",
-            "name": "贵州茅台"
-        },
-        {
-            "code": "688256",
-            "name": "寒武纪"
+            "code": "600875",
+            "name": "东方电气"
         }
     ],
     "refresh_interval": 5,
     "window_x": 5,
-    "window_y": 928,
+    "window_y": 885,
     "opacity": 0.9,
     "auto_start": true,
     "always_on_top": true

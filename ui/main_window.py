@@ -133,8 +133,23 @@ class MainWindow(QMainWindow):
         self._setup_tray()
         self._setup_timers()
 
+        # 设置窗口图标
+        logo_path = self._get_logo_path()
+        if logo_path:
+            self.setWindowIcon(QIcon(logo_path))
+
         # 加载分时数据（后台）
         QTimer.singleShot(500, self._load_all_intraday)
+
+    @staticmethod
+    def _get_logo_path():
+        """获取 logo.png 的路径"""
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(base_dir, "logo.png")
+        return path if os.path.exists(path) else None
 
     def _init_stocks(self):
         """初始化股票列表"""
@@ -184,8 +199,20 @@ class MainWindow(QMainWindow):
         title_layout = QHBoxLayout(title_bar)
         title_layout.setContentsMargins(8, 0, 4, 0)
 
-        title_label = QLabel("📊 股票监控")
+        # 标题图标
+        logo_path = self._get_logo_path()
+        logo_label = QLabel()
+        if logo_path:
+            pixmap = QPixmap(logo_path)
+            if not pixmap.isNull():
+                pixmap = pixmap.scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                logo_label.setPixmap(pixmap)
+        logo_label.setFixedSize(16, 16)
+
+        title_label = QLabel("股票监控")
         title_label.setStyleSheet("color: #AAAAAA; font-size: 11px; font-weight: bold;")
+        title_layout.addWidget(logo_label)
+        title_layout.addSpacing(4)
         title_layout.addWidget(title_label)
         title_layout.addStretch()
 
@@ -286,10 +313,14 @@ class MainWindow(QMainWindow):
 
     def _setup_tray(self):
         """设置系统托盘"""
-        # 创建一个简单的图标
-        pixmap = QPixmap(16, 16)
-        pixmap.fill(QColor(220, 50, 50))
-        icon = QIcon(pixmap)
+        # 使用 logo.png 作为图标
+        logo_path = self._get_logo_path()
+        if logo_path:
+            icon = QIcon(logo_path)
+        else:
+            pixmap = QPixmap(16, 16)
+            pixmap.fill(QColor(220, 50, 50))
+            icon = QIcon(pixmap)
 
         self.tray = QSystemTrayIcon(icon, self)
         self.tray.setToolTip("股票监控")
@@ -369,6 +400,7 @@ class MainWindow(QMainWindow):
     def _load_all_intraday(self):
         """加载所有股票的分时数据（首次）"""
         for stock in self.stocks:
+            fetch_realtime(stock)
             fetch_intraday(stock)
 
         for row in self.stock_rows:

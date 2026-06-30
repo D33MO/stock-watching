@@ -7,10 +7,23 @@ from PyQt6.QtWidgets import (
     QPushButton, QListWidget, QComboBox, QGroupBox, QListWidgetItem,
     QMessageBox, QAbstractItemView, QCheckBox
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, QObject
 from PyQt6.QtGui import QFont
 
 from data.fetcher import fetch_stock_name
+
+
+class FetchNameWorker(QObject):
+    """后台获取股票名称的工作线程"""
+    finished = pyqtSignal(str, str)  # code, name
+
+    def __init__(self, code: str):
+        super().__init__()
+        self.code = code
+
+    def run(self):
+        name = fetch_stock_name(self.code)
+        self.finished.emit(self.code, name)
 
 
 class SettingsDialog(QDialog):
@@ -117,6 +130,7 @@ class SettingsDialog(QDialog):
         btn_add = QPushButton("+ 添加")
         btn_add.clicked.connect(self._add_stock)
         input_layout.addWidget(btn_add)
+        self.btn_add = btn_add
 
         stocks_layout.addLayout(input_layout)
 
@@ -197,7 +211,7 @@ class SettingsDialog(QDialog):
             self.stock_list.addItem(f"{item['code']}  {item.get('name', '')}")
 
     def _add_stock(self):
-        """添加股票"""
+        """添加股票（异步获取名称）"""
         code = self.input_code.text().strip()
         if not code:
             return
@@ -209,10 +223,23 @@ class SettingsDialog(QDialog):
                 return
 
         self.input_code.clear()
-
-        # 同步获取股票名称（会短暂阻塞）
         self.input_code.setPlaceholderText("正在获取股票名称...")
-        name = fetch_stock_name(code)
+        self.btn_add.setEnabled(False)
+
+        # 后台线程获取名称
+        self._fetch_thread = QThread()
+        self._fetch_worker = FetchNameWorker(code)
+        self._fetch_worker.moveToThread(self._fetch_thread)
+        self._fetch_thread.started.connect(self._fetch_worker.run)
+        self._fetch_worker.finished.connect(self._on_name_fetched)
+        self._fetch_worker.finished.connect(self._fetch_thread.quit)
+        self._fetch_worker.finished.connect(self._fetch_worker.deleteLater)
+        self._fetch_thread.finished.connect(self._fetch_thread.deleteLater)
+        self._fetch_thread.start()
+
+    def _on_name_fetched(self, code: str, name: str):
+        """名称获取完成后的回调"""
+        self.btn_add.setEnabled(True)
         self.input_code.setPlaceholderText("输入股票代码，如 600519")
 
         if not name:

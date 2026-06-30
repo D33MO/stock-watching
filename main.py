@@ -16,7 +16,7 @@ else:
 sys.path.insert(0, base_dir)
 
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QIcon
 from PyQt6.QtCore import Qt
 
 from ui.main_window import MainWindow
@@ -31,6 +31,11 @@ def main():
     # 设置默认字体
     font = QFont("Microsoft YaHei", 9)
     app.setFont(font)
+
+    # 设置应用程序图标
+    icon_path = os.path.join(base_dir, "logo.png")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
 
     # 设置应用信息
     app.setApplicationName("股票监控")

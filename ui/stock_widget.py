@@ -1,6 +1,6 @@
 """
 单只股票行组件
-一行显示：股票名称 | 代码 | 现价 | 涨跌幅 | 迷你分时图
+一行显示：股票名称 | 现价 | 涨跌幅 | 迷你分时图
 """
 
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel
@@ -126,7 +126,7 @@ class MiniIntradayChart(QWidget):
 
 
 class StockRow(QWidget):
-    """单只股票行：名称 | 代码 | 现价 | 涨跌幅 | 迷你分时图"""
+    """单只股票行：名称 | 现价 | 涨跌幅 | 迷你分时图"""
 
     clicked = pyqtSignal(str)  # 点击信号，传递股票代码
 
@@ -147,11 +147,6 @@ class StockRow(QWidget):
         font = QFont("Microsoft YaHei", 10, QFont.Weight.Bold)
         self.label_name.setFont(font)
 
-        # 股票代码
-        self.label_code = QLabel(self.stock_data.code)
-        self.label_code.setFixedWidth(55)
-        self.label_code.setStyleSheet("color: #999999; font-size: 11px;")
-
         # 现价
         self.label_price = QLabel("--")
         self.label_price.setFixedWidth(70)
@@ -168,7 +163,6 @@ class StockRow(QWidget):
         self.mini_chart = MiniIntradayChart(width=90, height=40)
 
         layout.addWidget(self.label_name)
-        layout.addWidget(self.label_code)
         layout.addWidget(self.label_price)
         layout.addWidget(self.label_change)
         layout.addWidget(self.mini_chart)
