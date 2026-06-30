@@ -27,7 +27,10 @@ class StockData:
         self.low_price: float = 0.0
         self.change: float = 0.0
         self.change_pct: float = 0.0
-        self.volume: float = 0.0
+        self.volume: int = 0           # 成交量（手）
+        self.turnover: float = 0.0     # 成交额（元）
+        self.volume_ratio: float = 0.0  # 量比（东方财富，每3分钟更新）
+        self.turnover_rate: float = 0.0 # 换手率 %（东方财富，每3分钟更新）
         self.kline_data: list = []  # [(date, open, close, high, low), ...]
         self.intraday_data: list = []  # [(time_str, price), ...]
         self.last_update: float = 0
@@ -74,6 +77,8 @@ def fetch_realtime(stock: StockData) -> bool:
         stock.current_price = float(fields[3]) if fields[3] else 0
         stock.high_price = float(fields[4]) if fields[4] else 0
         stock.low_price = float(fields[5]) if fields[5] else 0
+        stock.volume = int(float(fields[8])) if len(fields) > 8 and fields[8] else 0
+        stock.turnover = float(fields[9]) if len(fields) > 9 and fields[9] else 0.0
 
         if stock.close_price > 0:
             stock.change = stock.current_price - stock.close_price
@@ -160,11 +165,13 @@ def fetch_stock_name(code: str) -> str:
 
 
 def fetch_intraday(stock: StockData) -> bool:
-    """通过akshare获取当日分时数据（1分钟级别）"""
+    """通过新浪财经获取当日分时数据（1分钟级别）"""
     try:
-        # 使用东方财富的分钟级数据
-        df = ak.stock_zh_a_hist_min_em(
-            symbol=stock.code,
+        # 使用新浪的分钟数据接口（比东方财富更稳定）
+        prefix = "sh" if stock.code.startswith(("6", "9")) else "sz"
+        symbol = f"{prefix}{stock.code}"
+        df = ak.stock_zh_a_minute(
+            symbol=symbol,
             period="1",
             adjust="",
         )
@@ -175,10 +182,10 @@ def fetch_intraday(stock: StockData) -> bool:
 
         # 只取今天的数据
         today_str = datetime.now().strftime("%Y-%m-%d")
-        df["时间"] = df["时间"].astype(str)
+        df["day"] = df["day"].astype(str)
 
         # 过滤出今天的分时数据
-        today_data = df[df["时间"].str.startswith(today_str)]
+        today_data = df[df["day"].str.startswith(today_str)]
 
         if today_data.empty:
             # 可能还没开盘或已收盘，取最后的数据
@@ -186,13 +193,13 @@ def fetch_intraday(stock: StockData) -> bool:
 
         stock.intraday_data = []
         for _, row in today_data.iterrows():
-            time_str = str(row["时间"])
+            time_str = str(row["day"])
             # 提取时:分 部分
             if " " in time_str:
                 time_part = time_str.split(" ")[1][:5]
             else:
                 time_part = time_str
-            price = float(row["收盘"])
+            price = float(row["close"])
             stock.intraday_data.append((time_part, price))
 
         stock.error = ""
@@ -200,5 +207,62 @@ def fetch_intraday(stock: StockData) -> bool:
 
     except Exception as e:
         stock.error = f"分时获取失败: {str(e)}"
+        traceback.print_exc()
+        return False
+
+
+def fetch_supplementary(stocks: list[StockData]) -> bool:
+    """
+    从腾讯财经获取补充数据（量比、换手率）。
+    使用 qt.gtimg.cn 接口，比东方财富更稳定。
+    建议每3分钟调用一次。
+    """
+    if not stocks:
+        return False
+    try:
+        # 批量查询，用 ; 拼接多个股票
+        symbols = []
+        code_to_stock = {}
+        for stock in stocks:
+            prefix = "sh" if stock.code.startswith(("6", "9")) else "sz"
+            sym = f"{prefix}{stock.code}"
+            symbols.append(sym)
+            code_to_stock[sym] = stock
+
+        url = f"https://qt.gtimg.cn/q={';'.join(symbols)}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.encoding = "gbk"
+        text = resp.text.strip()
+
+        for line in text.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            # 格式: v_sh600519="...";
+            match = re.search(r'v_([a-z]{2}\d+)="(.+)"', line)
+            if not match:
+                continue
+            sym = match.group(1)
+            fields = match.group(2).split("~")
+            # fields[39] = 换手率(%), fields[46] = 量比
+            stock = code_to_stock.get(sym)
+            if stock is None:
+                continue
+            if len(fields) > 46:
+                try:
+                    tr = float(fields[39]) if fields[39] else 0.0
+                    vr = float(fields[46]) if fields[46] else 0.0
+                    stock.turnover_rate = tr
+                    stock.volume_ratio = vr
+                except (ValueError, IndexError):
+                    pass
+
+        return True
+
+    except Exception as e:
+        print(f"补充数据获取失败: {e}")
         traceback.print_exc()
         return False

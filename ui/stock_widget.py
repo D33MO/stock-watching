@@ -1,6 +1,6 @@
 """
 单只股票行组件
-一行显示：股票名称 | 现价 | 涨跌幅 | 迷你分时图
+一行显示：股票名称 | 可选字段（现价/涨跌幅/成交量/...） | 迷你分时图
 """
 
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel
@@ -9,6 +9,59 @@ from PyQt6.QtGui import QFont, QColor, QPainter, QPen, QBrush, QPolygonF
 
 from data.fetcher import StockData
 
+
+# ===== 字段定义 =====
+# 实时字段（从新浪API获取，~3秒刷新）
+REALTIME_FIELDS = {
+    "price":      {"label": "现价",   "group": "realtime"},
+    "change_pct": {"label": "涨跌幅", "group": "realtime"},
+    "change":     {"label": "涨跌额", "group": "realtime"},
+    "volume":     {"label": "成交量", "group": "realtime"},
+    "turnover":   {"label": "成交额", "group": "realtime"},
+    "high":       {"label": "最高",   "group": "realtime"},
+    "low":        {"label": "最低",   "group": "realtime"},
+}
+
+# 补充字段（从东方财富获取，~3分钟更新）
+SUPPLEMENTARY_FIELDS = {
+    "volume_ratio":  {"label": "量比",   "group": "supplementary"},
+    "turnover_rate": {"label": "换手率", "group": "supplementary"},
+}
+
+# 合并所有字段
+ALL_FIELD_SPECS = {}
+ALL_FIELD_SPECS.update(REALTIME_FIELDS)
+ALL_FIELD_SPECS.update(SUPPLEMENTARY_FIELDS)
+
+# 涨跌颜色相关的字段
+CHANGE_COLORED_FIELDS = {"price", "change_pct", "change"}
+
+ALL_FIELD_WIDTH = 70  # 所有字段统一宽度
+
+
+def format_volume(val: int) -> str:
+    """格式化成交量（手 → 万手/亿手）"""
+    if val <= 0:
+        return "--"
+    if val >= 100000000:
+        return f"{val / 100000000:.2f}亿"
+    if val >= 10000:
+        return f"{val / 10000:.2f}万"
+    return f"{val}手"
+
+
+def format_turnover(val: float) -> str:
+    """格式化成交额（元 → 万/亿）"""
+    if val <= 0:
+        return "--"
+    if val >= 100000000:
+        return f"{val / 100000000:.2f}亿"
+    if val >= 10000:
+        return f"{val / 10000:.2f}万"
+    return f"{val:.0f}元"
+
+
+# ===== 迷你分时图 =====
 
 class MiniIntradayChart(QWidget):
     """迷你分时图组件"""
@@ -125,14 +178,19 @@ class MiniIntradayChart(QWidget):
         painter.end()
 
 
+# ===== 股票行 =====
+
 class StockRow(QWidget):
-    """单只股票行：名称 | 现价 | 涨跌幅 | 迷你分时图"""
+    """单只股票行：名称 | 可选字段 | 迷你分时图"""
 
     clicked = pyqtSignal(str)  # 点击信号，传递股票代码
 
-    def __init__(self, stock_data: StockData, parent=None):
+    def __init__(self, stock_data: StockData, display_fields: list[str] = None, parent=None):
         super().__init__(parent)
         self.stock_data = stock_data
+        self.display_fields = display_fields or ["price", "change_pct", "intraday"]
+        self.field_labels: dict[str, QLabel] = {}  # field_key -> QLabel
+        self.chart_widget: MiniIntradayChart | None = None
         self._setup_ui()
 
     def _setup_ui(self):
@@ -147,60 +205,135 @@ class StockRow(QWidget):
         font = QFont("Microsoft YaHei", 10, QFont.Weight.Bold)
         self.label_name.setFont(font)
 
-        # 现价
-        self.label_price = QLabel("--")
-        self.label_price.setFixedWidth(70)
-        self.label_price.setStyleSheet("color: #FFFFFF; font-size: 12px; font-weight: bold;")
-        self.label_price.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-
-        # 涨跌幅
-        self.label_change = QLabel("--")
-        self.label_change.setFixedWidth(65)
-        self.label_change.setStyleSheet("color: #999999; font-size: 11px;")
-        self.label_change.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-
-        # 迷你分时图
-        self.mini_chart = MiniIntradayChart(width=90, height=40)
-
         layout.addWidget(self.label_name)
-        layout.addWidget(self.label_price)
-        layout.addWidget(self.label_change)
-        layout.addWidget(self.mini_chart)
+
+        # 动态字段
+        for field_key in self.display_fields:
+            if field_key == "intraday":
+                self.chart_widget = MiniIntradayChart(width=90, height=40)
+                layout.addWidget(self.chart_widget)
+            elif field_key in ALL_FIELD_SPECS:
+                label = QLabel("--")
+                label.setFixedWidth(ALL_FIELD_WIDTH)
+                label.setStyleSheet("color: #E0E0E0; font-size: 11px;")
+                label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self.field_labels[field_key] = label
+                layout.addWidget(label)
 
         self.setFixedHeight(56)
 
+    def rebuild(self, display_fields: list[str]):
+        """重建显示字段布局（设置保存后调用）"""
+        self.display_fields = display_fields
+        self.field_labels.clear()
+        self.chart_widget = None
+
+        # 清除旧布局
+        old_layout = self.layout()
+        if old_layout:
+            # 删除旧布局中的所有 widget
+            while old_layout.count():
+                item = old_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            # 删除旧布局本身（但 QWidget.setLayout 会自动处理）
+            # 直接删除再重建
+
+        new_layout = QHBoxLayout(self)
+        new_layout.setContentsMargins(8, 3, 8, 3)
+        new_layout.setSpacing(6)
+
+        # 重新添加名称
+        new_layout.addWidget(self.label_name)
+
+        # 动态字段
+        for field_key in self.display_fields:
+            if field_key == "intraday":
+                self.chart_widget = MiniIntradayChart(width=90, height=40)
+                new_layout.addWidget(self.chart_widget)
+            elif field_key in ALL_FIELD_SPECS:
+                label = QLabel("--")
+                label.setFixedWidth(ALL_FIELD_WIDTH)
+                label.setStyleSheet("color: #E0E0E0; font-size: 11px;")
+                label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self.field_labels[field_key] = label
+                new_layout.addWidget(label)
+
+        # 更新显示
+        self.update_display()
+
     def update_display(self):
-        """更新显示数据"""
+        """更新所有字段的显示"""
         s = self.stock_data
 
-        # 更新价格
-        if s.current_price > 0:
-            self.label_price.setText(f"{s.current_price:.2f}")
+        # 涨跌颜色
+        if s.change_pct > 0:
+            up_color = "#FF4444"
+            dn_color = "#FF4444"
+            neutral_color = "#E0E0E0"
+        elif s.change_pct < 0:
+            up_color = "#44BB44"
+            dn_color = "#44BB44"
+            neutral_color = "#E0E0E0"
         else:
-            self.label_price.setText("--")
+            up_color = "#E0E0E0"
+            dn_color = "#E0E0E0"
+            neutral_color = "#E0E0E0"
 
-        # 更新涨跌幅
-        if s.current_price > 0 and s.close_price > 0:
-            sign = "+" if s.change_pct >= 0 else ""
-            self.label_change.setText(f"{sign}{s.change_pct:.2f}%")
+        colored = s.current_price > 0 and s.close_price > 0
 
-            # 颜色
-            if s.change_pct > 0:
-                color = "#FF4444"  # 红色
-            elif s.change_pct < 0:
-                color = "#44BB44"  # 绿色
+        for field_key, label in self.field_labels.items():
+            text = "--"
+            color = neutral_color
+
+            if field_key == "price":
+                if s.current_price > 0:
+                    text = f"{s.current_price:.2f}"
+                    color = up_color if s.change_pct >= 0 else dn_color if colored else neutral_color
+                else:
+                    text = "--"
+
+            elif field_key == "change_pct":
+                if colored:
+                    text = f"{s.change_pct:+.2f}%"
+                    color = up_color if s.change_pct >= 0 else dn_color
+                else:
+                    text = "--"
+
+            elif field_key == "change":
+                if colored:
+                    text = f"{s.change:+.2f}"
+                    color = up_color if s.change_pct >= 0 else dn_color
+                else:
+                    text = "--"
+
+            elif field_key == "volume":
+                text = format_volume(s.volume)
+
+            elif field_key == "turnover":
+                text = format_turnover(s.turnover)
+
+            elif field_key == "high":
+                text = f"{s.high_price:.2f}" if s.high_price > 0 else "--"
+
+            elif field_key == "low":
+                text = f"{s.low_price:.2f}" if s.low_price > 0 else "--"
+
+            elif field_key == "volume_ratio":
+                text = f"{s.volume_ratio:.2f}" if s.volume_ratio > 0 else "--"
+
+            elif field_key == "turnover_rate":
+                text = f"{s.turnover_rate:.2f}%" if s.turnover_rate > 0 else "--"
+
+            label.setText(text)
+            if field_key in CHANGE_COLORED_FIELDS and colored:
+                label.setStyleSheet(f"color: {color}; font-size: 11px;")
             else:
-                color = "#999999"
-            self.label_change.setStyleSheet(f"color: {color}; font-size: 11px;")
-            self.label_price.setStyleSheet(f"color: {color}; font-size: 12px; font-weight: bold;")
-        else:
-            self.label_change.setText("--")
-            self.label_change.setStyleSheet("color: #999999; font-size: 11px;")
-            self.label_price.setStyleSheet("color: #999999; font-size: 12px;")
+                label.setStyleSheet("color: #E0E0E0; font-size: 11px;")
 
         # 更新分时图
-        if s.intraday_data:
-            self.mini_chart.set_intraday_data(s.intraday_data, s.close_price)
+        if self.chart_widget and s.intraday_data:
+            self.chart_widget.set_intraday_data(s.intraday_data, s.close_price)
 
     def mousePressEvent(self, event):
         self.clicked.emit(self.stock_data.code)

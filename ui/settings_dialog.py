@@ -1,16 +1,18 @@
 """
-设置窗口 - 股票管理 & 刷新间隔设置
+设置窗口 - 股票管理 & 刷新间隔设置 & 自定义显示字段
 """
 
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+    QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
     QPushButton, QListWidget, QComboBox, QGroupBox, QListWidgetItem,
-    QMessageBox, QAbstractItemView, QCheckBox
+    QMessageBox, QAbstractItemView, QCheckBox, QWidget
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QThread, QObject
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, QObject, QTimer
 from PyQt6.QtGui import QFont
 
 from data.fetcher import fetch_stock_name
+from ui.stock_widget import REALTIME_FIELDS, SUPPLEMENTARY_FIELDS
+from version import __version__, GITHUB_API_URL, GITHUB_RELEASES_URL
 
 
 class FetchNameWorker(QObject):
@@ -26,6 +28,41 @@ class FetchNameWorker(QObject):
         self.finished.emit(self.code, name)
 
 
+class CheckUpdateWorker(QObject):
+    """后台检查更新的工作线程"""
+    finished = pyqtSignal(bool, str)  # has_update, latest_version
+
+    def run(self):
+        try:
+            import requests
+            resp = requests.get(GITHUB_API_URL, timeout=5)
+            if resp.status_code != 200:
+                self.finished.emit(False, "")
+                return
+            data = resp.json()
+            tag = data.get("tag_name", "")
+            latest_ver = tag.lstrip("v")  # 去掉开头的 v
+            has_update = self._compare_versions(latest_ver, __version__) > 0
+            self.finished.emit(has_update, latest_ver)
+        except Exception:
+            self.finished.emit(False, "")
+
+    @staticmethod
+    def _compare_versions(v1: str, v2: str) -> int:
+        """版本比较，v1 > v2 返回 1，相等返回 0，小于返回 -1"""
+        try:
+            parts1 = [int(x) for x in v1.split(".")]
+            parts2 = [int(x) for x in v2.split(".")]
+            for a, b in zip(parts1, parts2):
+                if a > b:
+                    return 1
+                if a < b:
+                    return -1
+            return 0
+        except (ValueError, AttributeError):
+            return 0  # 解析失败视为相同版本
+
+
 class SettingsDialog(QDialog):
     """设置窗口"""
 
@@ -33,15 +70,18 @@ class SettingsDialog(QDialog):
     settings_changed = pyqtSignal()
 
     def __init__(self, stocks_config: list, refresh_interval: int,
-                 auto_start: bool = False, always_on_top: bool = True, parent=None):
+                 auto_start: bool = False, always_on_top: bool = True,
+                 display_fields: list[str] = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("设置")
-        self.setFixedSize(400, 560)
-        self.stocks_config = list(stocks_config)  # [{"code": "600519", "name": "贵州茅台"}, ...]
+        self.setFixedSize(420, 620)
+        self.stocks_config = list(stocks_config)
         self.refresh_interval = refresh_interval
         self.auto_start = auto_start
         self.always_on_top = always_on_top
+        self.display_fields = display_fields or ["price", "change_pct", "intraday"]
         self._setup_ui()
+        QTimer.singleShot(0, self._check_update)
 
     def _setup_ui(self):
         self.setStyleSheet("""
@@ -152,25 +192,71 @@ class SettingsDialog(QDialog):
         group_stocks.setLayout(stocks_layout)
         layout.addWidget(group_stocks)
 
-        # ===== 刷新设置 =====
-        group_refresh = QGroupBox("数据刷新")
-        refresh_layout = QHBoxLayout()
+        # ===== 实时行情 =====
+        group_realtime = QGroupBox("实时行情")
+        rt_layout = QVBoxLayout()
 
-        refresh_layout.addWidget(QLabel("刷新间隔:"))
+        # 字段勾选（网格）
+        rt_grid = QGridLayout()
+        rt_grid.setVerticalSpacing(6)
+        self._realtime_cbs = {}
+        col = 0
+        row = 0
+        for key, spec in REALTIME_FIELDS.items():
+            cb = QCheckBox(spec["label"])
+            cb.setChecked(key in self.display_fields)
+            self._realtime_cbs[key] = cb
+            rt_grid.addWidget(cb, row, col)
+            col += 1
+            if col > 2:
+                col = 0
+                row += 1
+        # 分时图
+        self._cb_intraday = QCheckBox("分时图")
+        self._cb_intraday.setChecked("intraday" in self.display_fields)
+        rt_grid.addWidget(self._cb_intraday, row + 1, 0)
+        rt_layout.addLayout(rt_grid)
 
+        # 刷新间隔（放在实时行情组内）
+        rt_sep = QWidget()
+        rt_sep.setFixedHeight(1)
+        rt_sep.setStyleSheet("background-color: #444;")
+        rt_layout.addWidget(rt_sep)
+
+        interval_row = QHBoxLayout()
+        interval_row.addWidget(QLabel("刷新间隔:"))
         self.combo_interval = QComboBox()
         self.combo_interval.addItems(["3秒", "5秒", "10秒", "30秒", "60秒"])
         self.interval_values = [3, 5, 10, 30, 60]
-        # 设置当前选中
         if self.refresh_interval in self.interval_values:
             self.combo_interval.setCurrentIndex(self.interval_values.index(self.refresh_interval))
         else:
-            self.combo_interval.setCurrentIndex(1)  # 默认5秒
-        refresh_layout.addWidget(self.combo_interval)
+            self.combo_interval.setCurrentIndex(1)
+        interval_row.addWidget(self.combo_interval)
+        interval_row.addStretch()
+        rt_layout.addLayout(interval_row)
 
-        refresh_layout.addStretch()
-        group_refresh.setLayout(refresh_layout)
-        layout.addWidget(group_refresh)
+        group_realtime.setLayout(rt_layout)
+        layout.addWidget(group_realtime)
+
+        # 补充数据字段
+        group_supp = QGroupBox("补充数据（约3分钟更新一次）")
+        supp_layout = QVBoxLayout()
+        supp_grid = QHBoxLayout()
+        self._supp_cbs = {}
+        for key, spec in SUPPLEMENTARY_FIELDS.items():
+            cb = QCheckBox(spec["label"])
+            cb.setChecked(key in self.display_fields)
+            self._supp_cbs[key] = cb
+            supp_grid.addWidget(cb)
+        supp_grid.addStretch()
+        supp_layout.addLayout(supp_grid)
+        # 说明文字
+        note = QLabel("量比和换手率数据约3分钟更新一次")
+        note.setStyleSheet("color: #888888; font-size: 10px;")
+        supp_layout.addWidget(note)
+        group_supp.setLayout(supp_layout)
+        layout.addWidget(group_supp)
 
         # ===== 窗口行为 =====
         group_behavior = QGroupBox("窗口行为")
@@ -188,6 +274,29 @@ class SettingsDialog(QDialog):
 
         group_behavior.setLayout(behavior_layout)
         layout.addWidget(group_behavior)
+
+        # ===== 版本信息 =====
+        update_layout = QHBoxLayout()
+        self.label_version = QLabel(f"当前版本 v{__version__}")
+        self.label_version.setStyleSheet("color: #666666; font-size: 11px;")
+        self.label_update = QLabel("")
+        self.label_update.setStyleSheet("color: #FFAA00; font-size: 11px;")
+        self.btn_download = QPushButton("去下载")
+        self.btn_download.setStyleSheet("""
+            QPushButton {
+                color: #FFFFFF; font-size: 11px;
+                background-color: #2266CC; border: none;
+                border-radius: 4px; padding: 4px 12px;
+            }
+            QPushButton:hover { background-color: #3388EE; }
+        """)
+        self.btn_download.clicked.connect(self._open_download)
+        self.btn_download.setVisible(False)
+        update_layout.addWidget(self.label_version)
+        update_layout.addWidget(self.label_update)
+        update_layout.addWidget(self.btn_download)
+        update_layout.addStretch()
+        layout.addLayout(update_layout)
 
         # ===== 底部按钮 =====
         bottom_layout = QHBoxLayout()
@@ -216,7 +325,6 @@ class SettingsDialog(QDialog):
         if not code:
             return
 
-        # 检查是否已存在
         for s in self.stocks_config:
             if s["code"] == code:
                 QMessageBox.warning(self, "提示", f"股票 {code} 已存在")
@@ -226,7 +334,6 @@ class SettingsDialog(QDialog):
         self.input_code.setPlaceholderText("正在获取股票名称...")
         self.btn_add.setEnabled(False)
 
-        # 后台线程获取名称
         self._fetch_thread = QThread()
         self._fetch_worker = FetchNameWorker(code)
         self._fetch_worker.moveToThread(self._fetch_thread)
@@ -238,7 +345,6 @@ class SettingsDialog(QDialog):
         self._fetch_thread.start()
 
     def _on_name_fetched(self, code: str, name: str):
-        """名称获取完成后的回调"""
         self.btn_add.setEnabled(True)
         self.input_code.setPlaceholderText("输入股票代码，如 600519")
 
@@ -249,8 +355,31 @@ class SettingsDialog(QDialog):
         self.stocks_config.append(new_item)
         self._refresh_stock_list()
 
+    def _check_update(self):
+        """后台检查更新"""
+        self._update_thread = QThread()
+        self._update_worker = CheckUpdateWorker()
+        self._update_worker.moveToThread(self._update_thread)
+        self._update_thread.started.connect(self._update_worker.run)
+        self._update_worker.finished.connect(self._on_update_check)
+        self._update_worker.finished.connect(self._update_thread.quit)
+        self._update_worker.finished.connect(self._update_worker.deleteLater)
+        self._update_thread.finished.connect(self._update_thread.deleteLater)
+        self._update_thread.start()
+
+    def _on_update_check(self, has_update: bool, latest_ver: str):
+        """更新检查结果"""
+        if has_update:
+            self.label_update.setText(f"🔔 发现新版本 v{latest_ver}  ")
+            self.btn_download.setVisible(True)
+
+    def _open_download(self):
+        """打开下载页面"""
+        from PyQt6.QtGui import QDesktopServices
+        from PyQt6.QtCore import QUrl
+        QDesktopServices.openUrl(QUrl(GITHUB_RELEASES_URL))
+
     def _delete_stock(self):
-        """删除选中股票"""
         row = self.stock_list.currentRow()
         if row < 0:
             return
@@ -259,12 +388,11 @@ class SettingsDialog(QDialog):
 
     def _save(self):
         """保存设置"""
-        # 获取刷新间隔
         idx = self.combo_interval.currentIndex()
         self.refresh_interval = self.interval_values[idx]
-        # 获取窗口行为设置
         self.auto_start = self.cb_auto_start.isChecked()
         self.always_on_top = self.cb_always_on_top.isChecked()
+        self.display_fields = self.get_display_fields()
         self.settings_changed.emit()
         self.accept()
 
@@ -279,3 +407,19 @@ class SettingsDialog(QDialog):
 
     def get_always_on_top(self):
         return self.always_on_top
+
+    def get_display_fields(self) -> list[str]:
+        """获取用户勾选的显示字段列表（保持配置中的顺序）"""
+        fields = []
+        # 实时字段按定义顺序
+        for key in REALTIME_FIELDS:
+            if self._realtime_cbs[key].isChecked():
+                fields.append(key)
+        # 分时图
+        if self._cb_intraday.isChecked():
+            fields.append("intraday")
+        # 补充字段按定义顺序
+        for key in SUPPLEMENTARY_FIELDS:
+            if self._supp_cbs[key].isChecked():
+                fields.append(key)
+        return fields

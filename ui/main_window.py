@@ -16,8 +16,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal
 from PyQt6.QtGui import QFont, QColor, QPainter, QPen, QAction, QIcon, QPixmap
 
-from data.fetcher import StockData, fetch_realtime, fetch_kline, fetch_intraday
-from ui.stock_widget import StockRow
+from data.fetcher import StockData, fetch_realtime, fetch_kline, fetch_intraday, fetch_supplementary
+from ui.stock_widget import StockRow, ALL_FIELD_SPECS, ALL_FIELD_WIDTH
 from ui.settings_dialog import SettingsDialog
 
 
@@ -40,6 +40,7 @@ def load_config():
             {"code": "300750", "name": "宁德时代"},
             {"code": "002594", "name": "比亚迪"},
         ],
+        "display_fields": ["price", "change_pct", "intraday"],
         "refresh_interval": 5,
         "window_x": 0,
         "window_y": 800,
@@ -282,8 +283,9 @@ class MainWindow(QMainWindow):
             row.deleteLater()
         self.stock_rows.clear()
 
+        display_fields = self.config.get("display_fields", ["price", "change_pct", "intraday"])
         for stock in self.stocks:
-            row = StockRow(stock)
+            row = StockRow(stock, display_fields=display_fields)
             row.clicked.connect(self._on_stock_clicked)
             self.stock_rows.append(row)
             self.stock_layout.addWidget(row)
@@ -302,12 +304,20 @@ class MainWindow(QMainWindow):
         title_h = 25
         row_h = 56
         total_h = title_h + n * (row_h + 1) + 4
-        w = 400
+
+        # 根据显示字段计算宽度
+        display_fields = self.config.get("display_fields", ["price", "change_pct", "intraday"])
+        w = 78  # 名称标签(70) + 左边距(8)
+        for f in display_fields:
+            if f == "intraday":
+                w += 96  # 分时图宽度(90) + 间距(6)
+            elif f in ALL_FIELD_SPECS:
+                w += ALL_FIELD_WIDTH + 6  # 字段宽度 + 间距
+        w += 8  # 右边距
 
         x = self.config.get("window_x", 0)
         y = self.config.get("window_y", 800)
 
-        # 先调整到屏幕合适位置
         self.setFixedSize(w, total_h)
         self.move(x, y)
 
@@ -377,8 +387,14 @@ class MainWindow(QMainWindow):
         self.timer_intraday.timeout.connect(self._refresh_intraday)
         self.timer_intraday.start(60000)
 
+        # 补充数据定时器（量比、换手率等，每3分钟）
+        self.timer_supplementary = QTimer(self)
+        self.timer_supplementary.timeout.connect(self._refresh_supplementary)
+        self.timer_supplementary.start(180000)  # 3分钟
+
         # 启动时立即刷新一次
         QTimer.singleShot(100, self._refresh_realtime)
+        QTimer.singleShot(500, self._refresh_supplementary)
 
     def _refresh_realtime(self):
         """刷新所有股票的实时行情"""
@@ -397,6 +413,14 @@ class MainWindow(QMainWindow):
         for row in self.stock_rows:
             row.update_display()
 
+    def _refresh_supplementary(self):
+        """刷新补充数据（量比、换手率等，每3分钟）"""
+        if not self.stocks:
+            return
+        fetch_supplementary(self.stocks)
+        for row in self.stock_rows:
+            row.update_display()
+
     def _load_all_intraday(self):
         """加载所有股票的分时数据（首次）"""
         for stock in self.stocks:
@@ -406,6 +430,9 @@ class MainWindow(QMainWindow):
         for row in self.stock_rows:
             row.update_display()
 
+        # 首次加载补充数据
+        self._refresh_supplementary()
+
     def _open_settings(self):
         """打开设置窗口"""
         dialog = SettingsDialog(
@@ -413,6 +440,7 @@ class MainWindow(QMainWindow):
             refresh_interval=self.config.get("refresh_interval", 5),
             auto_start=self.config.get("auto_start", False),
             always_on_top=self.config.get("always_on_top", True),
+            display_fields=self.config.get("display_fields", ["price", "change_pct", "intraday"]),
             parent=self
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
@@ -420,12 +448,15 @@ class MainWindow(QMainWindow):
             new_interval = dialog.get_refresh_interval()
             new_auto_start = dialog.get_auto_start()
             new_always_on_top = dialog.get_always_on_top()
+            new_display_fields = dialog.get_display_fields()
 
             # 记录旧值用于比较
             old_always_on_top = self.config.get("always_on_top", True)
+            old_display_fields = self.config.get("display_fields", [])
 
             # 更新配置
             self.config["stocks"] = new_stocks
+            self.config["display_fields"] = new_display_fields
             self.config["refresh_interval"] = new_interval
             self.config["auto_start"] = new_auto_start
             self.config["always_on_top"] = new_always_on_top
@@ -460,8 +491,9 @@ class MainWindow(QMainWindow):
             self.stocks.append(StockData(item["code"], item.get("name", item["code"])))
 
         # 重建行
+        display_fields = self.config.get("display_fields", ["price", "change_pct", "intraday"])
         for stock in self.stocks:
-            row = StockRow(stock)
+            row = StockRow(stock, display_fields=display_fields)
             row.clicked.connect(self._on_stock_clicked)
             self.stock_rows.append(row)
             self.stock_layout.addWidget(row)

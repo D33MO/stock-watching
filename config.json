@@ -6,9 +6,14 @@
         }
     ],
     "refresh_interval": 5,
-    "window_x": 5,
-    "window_y": 885,
+    "window_x": 251,
+    "window_y": 733,
     "opacity": 0.9,
     "auto_start": true,
-    "always_on_top": true
+    "always_on_top": true,
+    "display_fields": [
+        "price",
+        "change_pct",
+        "intraday"
+    ]
 }
