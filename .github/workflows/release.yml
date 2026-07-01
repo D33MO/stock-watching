@@ -47,7 +47,7 @@ jobs:
         shell: bash
         run: |
           pyinstaller --noconfirm --onefile --windowed \
-            --name "股票监控" \
+            --name "StockMonitor" \
             --icon logo.ico \
             --add-data "config.json;." \
             --add-data "logo.ico;." \
@@ -66,7 +66,7 @@ jobs:
         run: |
           echo "dist/ 目录内容:"
           ls -la dist/
-          EXE="dist/股票监控.exe"
+          EXE="dist/StockMonitor.exe"
           if [ -f "$EXE" ]; then
             SIZE=$(stat -c%s "$EXE")
             echo "✅ exe 打包成功，大小: $((SIZE/1024/1024))MB"
@@ -86,6 +86,6 @@ jobs:
           name: "v${{ env.VERSION }}"
           generate_release_notes: true
           files: |
-            dist/股票监控.exe
+            dist/StockMonitor.exe
             dist/config.json
           fail_on_unmatched_files: false
