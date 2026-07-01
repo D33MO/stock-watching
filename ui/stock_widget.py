@@ -33,6 +33,12 @@ ALL_FIELD_SPECS = {}
 ALL_FIELD_SPECS.update(REALTIME_FIELDS)
 ALL_FIELD_SPECS.update(SUPPLEMENTARY_FIELDS)
 
+# 期货字段
+FUTURES_FIELDS = {
+    "open_interest": {"label": "持仓量(期货)", "group": "futures"},
+}
+ALL_FIELD_SPECS.update(FUTURES_FIELDS)
+
 # 涨跌颜色相关的字段
 CHANGE_COLORED_FIELDS = {"price", "change_pct", "change"}
 
@@ -59,6 +65,15 @@ def format_turnover(val: float) -> str:
     if val >= 10000:
         return f"{val / 10000:.2f}万"
     return f"{val:.0f}元"
+
+
+def format_open_interest(val: int) -> str:
+    """格式化期货持仓量（手 → 万手）"""
+    if val <= 0:
+        return "--"
+    if val >= 10000:
+        return f"{val / 10000:.2f}万"
+    return f"{val}手"
 
 
 # ===== 迷你分时图 =====
@@ -198,10 +213,19 @@ class StockRow(QWidget):
         layout.setContentsMargins(8, 3, 8, 3)
         layout.setSpacing(6)
 
-        # 股票名称
-        self.label_name = QLabel(self.stock_data.name)
+        # 品种名称（期货用橙色区分）
+        is_futures = self.stock_data.instrument_type == "futures"
+        name_text = self.stock_data.name
+        if is_futures:
+            # 期货仅显示中文名称（如 "沪铜2409"）
+            name_color = "#FFAA00"
+        else:
+            name_color = "#E0E0E0"
+
+        self.label_name = QLabel(name_text)
         self.label_name.setFixedWidth(70)
-        self.label_name.setStyleSheet("color: #E0E0E0; font-size: 12px;")
+        self.label_name.setStyleSheet(f"color: {name_color}; font-size: 12px;")
+        self.label_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         font = QFont("Microsoft YaHei", 10, QFont.Weight.Bold)
         self.label_name.setFont(font)
 
@@ -236,14 +260,19 @@ class StockRow(QWidget):
                 item = old_layout.takeAt(0)
                 if item.widget():
                     item.widget().deleteLater()
-            # 删除旧布局本身（但 QWidget.setLayout 会自动处理）
-            # 直接删除再重建
 
         new_layout = QHBoxLayout(self)
         new_layout.setContentsMargins(8, 3, 8, 3)
         new_layout.setSpacing(6)
 
-        # 重新添加名称
+        # 重新添加名称（保持期货颜色）
+        is_futures = self.stock_data.instrument_type == "futures"
+        if is_futures:
+            name_color = "#FFAA00"
+        else:
+            name_color = "#E0E0E0"
+        self.label_name.setStyleSheet(f"color: {name_color}; font-size: 12px;")
+        self.label_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         new_layout.addWidget(self.label_name)
 
         # 动态字段
@@ -325,8 +354,15 @@ class StockRow(QWidget):
             elif field_key == "turnover_rate":
                 text = f"{s.turnover_rate:.2f}%" if s.turnover_rate > 0 else "--"
 
+            elif field_key == "open_interest":
+                text = format_open_interest(s.open_interest)
+
             label.setText(text)
-            if field_key in CHANGE_COLORED_FIELDS and colored:
+            if field_key == "high":
+                label.setStyleSheet("color: #AA2222; font-size: 11px;")
+            elif field_key == "low":
+                label.setStyleSheet("color: #228B22; font-size: 11px;")
+            elif field_key in CHANGE_COLORED_FIELDS and colored:
                 label.setStyleSheet(f"color: {color}; font-size: 11px;")
             else:
                 label.setStyleSheet("color: #E0E0E0; font-size: 11px;")

@@ -5,13 +5,13 @@
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
     QPushButton, QListWidget, QComboBox, QGroupBox, QListWidgetItem,
-    QMessageBox, QAbstractItemView, QCheckBox, QWidget
+    QMessageBox, QAbstractItemView, QCheckBox, QWidget, QScrollArea, QFrame
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, QObject, QTimer
 from PyQt6.QtGui import QFont
 
-from data.fetcher import fetch_stock_name
-from ui.stock_widget import REALTIME_FIELDS, SUPPLEMENTARY_FIELDS
+from data.fetcher import fetch_stock_name, fetch_futures_name
+from ui.stock_widget import REALTIME_FIELDS, SUPPLEMENTARY_FIELDS, FUTURES_FIELDS
 from version import __version__, GITHUB_API_URL, GITHUB_RELEASES_URL
 
 
@@ -25,6 +25,19 @@ class FetchNameWorker(QObject):
 
     def run(self):
         name = fetch_stock_name(self.code)
+        self.finished.emit(self.code, name)
+
+
+class FetchFuturesNameWorker(QObject):
+    """后台获取期货合约名称的工作线程"""
+    finished = pyqtSignal(str, str)  # code, name
+
+    def __init__(self, code: str):
+        super().__init__()
+        self.code = code
+
+    def run(self):
+        name = fetch_futures_name(self.code)
         self.finished.emit(self.code, name)
 
 
@@ -154,7 +167,17 @@ class SettingsDialog(QDialog):
             }
         """)
 
-        layout = QVBoxLayout(self)
+        main_layout = QVBoxLayout(self)
+
+        # 创建滚动区域，内容过多时可滚动
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background-color: transparent; border: none; }")
+        scroll_content = QWidget()
+        scroll_content.setStyleSheet("background-color: transparent;")
+        layout = QVBoxLayout(scroll_content)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         # ===== 股票管理 =====
         group_stocks = QGroupBox("股票管理")
@@ -162,6 +185,12 @@ class SettingsDialog(QDialog):
 
         # 输入行
         input_layout = QHBoxLayout()
+        self.combo_type = QComboBox()
+        self.combo_type.addItems(["股票", "期货"])
+        self.combo_type.setFixedWidth(70)
+        self.combo_type.currentTextChanged.connect(self._on_type_changed)
+        input_layout.addWidget(self.combo_type)
+
         self.input_code = QLineEdit()
         self.input_code.setPlaceholderText("输入股票代码，如 600519")
         self.input_code.returnPressed.connect(self._add_stock)
@@ -177,8 +206,9 @@ class SettingsDialog(QDialog):
         # 股票列表
         self.stock_list = QListWidget()
         self.stock_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.stock_list.setMinimumHeight(160)
         self._refresh_stock_list()
-        stocks_layout.addWidget(self.stock_list)
+        stocks_layout.addWidget(self.stock_list, 1)
 
         # 删除按钮
         btn_layout = QHBoxLayout()
@@ -240,7 +270,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(group_realtime)
 
         # 补充数据字段
-        group_supp = QGroupBox("补充数据（约3分钟更新一次）")
+        group_supp = QGroupBox("其他数据")
         supp_layout = QVBoxLayout()
         supp_grid = QHBoxLayout()
         self._supp_cbs = {}
@@ -255,6 +285,23 @@ class SettingsDialog(QDialog):
         note = QLabel("量比和换手率数据约3分钟更新一次")
         note.setStyleSheet("color: #888888; font-size: 10px;")
         supp_layout.addWidget(note)
+
+        # 期货字段
+        supp_sep = QWidget()
+        supp_sep.setFixedHeight(1)
+        supp_sep.setStyleSheet("background-color: #444;")
+        supp_layout.addWidget(supp_sep)
+
+        futures_row = QHBoxLayout()
+        self._futures_cbs = {}
+        for key, spec in FUTURES_FIELDS.items():
+            cb = QCheckBox(spec["label"])
+            cb.setChecked(key in self.display_fields)
+            self._futures_cbs[key] = cb
+            futures_row.addWidget(cb)
+        futures_row.addStretch()
+        supp_layout.addLayout(futures_row)
+
         group_supp.setLayout(supp_layout)
         layout.addWidget(group_supp)
 
@@ -274,6 +321,10 @@ class SettingsDialog(QDialog):
 
         group_behavior.setLayout(behavior_layout)
         layout.addWidget(group_behavior)
+
+        # 将设置内容放入滚动区域
+        scroll.setWidget(scroll_content)
+        main_layout.addWidget(scroll)
 
         # ===== 版本信息 =====
         update_layout = QHBoxLayout()
@@ -296,7 +347,7 @@ class SettingsDialog(QDialog):
         update_layout.addWidget(self.label_update)
         update_layout.addWidget(self.btn_download)
         update_layout.addStretch()
-        layout.addLayout(update_layout)
+        main_layout.addLayout(update_layout)
 
         # ===== 底部按钮 =====
         bottom_layout = QHBoxLayout()
@@ -311,47 +362,87 @@ class SettingsDialog(QDialog):
         btn_save.clicked.connect(self._save)
         bottom_layout.addWidget(btn_save)
 
-        layout.addLayout(bottom_layout)
+        main_layout.addLayout(bottom_layout)
 
     def _refresh_stock_list(self):
-        """刷新股票列表显示"""
+        """刷新品种列表显示"""
         self.stock_list.clear()
         for item in self.stocks_config:
-            self.stock_list.addItem(f"{item['code']}  {item.get('name', '')}")
+            typ = item.get("type", "stock")
+            name = item.get("name", "")
+            if typ == "futures":
+                display = f"{item['code']}  {name}  [期货]"
+            else:
+                display = f"{item['code']}  {name}"
+            self.stock_list.addItem(display)
+
+    def _on_type_changed(self, text: str):
+        """切换添加类型时更新提示"""
+        if text == "期货":
+            self.input_code.setPlaceholderText("输入期货代码，如 CU2409")
+        else:
+            self.input_code.setPlaceholderText("输入股票代码，如 600519")
 
     def _add_stock(self):
-        """添加股票（异步获取名称）"""
-        code = self.input_code.text().strip()
+        """添加品种（异步获取名称）"""
+        code = self.input_code.text().strip().upper()
         if not code:
             return
 
+        inst_type = "futures" if self.combo_type.currentText() == "期货" else "stock"
+
         for s in self.stocks_config:
             if s["code"] == code:
-                QMessageBox.warning(self, "提示", f"股票 {code} 已存在")
+                QMessageBox.warning(self, "提示", f"{code} 已存在")
                 return
 
         self.input_code.clear()
-        self.input_code.setPlaceholderText("正在获取股票名称...")
+        self.input_code.setPlaceholderText("正在获取名称...")
         self.btn_add.setEnabled(False)
+        self.combo_type.setEnabled(False)
 
-        self._fetch_thread = QThread()
-        self._fetch_worker = FetchNameWorker(code)
-        self._fetch_worker.moveToThread(self._fetch_thread)
-        self._fetch_thread.started.connect(self._fetch_worker.run)
-        self._fetch_worker.finished.connect(self._on_name_fetched)
-        self._fetch_worker.finished.connect(self._fetch_thread.quit)
-        self._fetch_worker.finished.connect(self._fetch_worker.deleteLater)
-        self._fetch_thread.finished.connect(self._fetch_thread.deleteLater)
-        self._fetch_thread.start()
+        if inst_type == "futures":
+            self._fetch_thread = QThread()
+            self._fetch_worker = FetchFuturesNameWorker(code)
+            self._fetch_worker.moveToThread(self._fetch_thread)
+            self._fetch_thread.started.connect(self._fetch_worker.run)
+            self._fetch_worker.finished.connect(self._on_futures_name_fetched)
+            self._fetch_worker.finished.connect(self._fetch_thread.quit)
+            self._fetch_worker.finished.connect(self._fetch_worker.deleteLater)
+            self._fetch_thread.finished.connect(self._fetch_thread.deleteLater)
+            self._fetch_thread.start()
+        else:
+            self._fetch_thread = QThread()
+            self._fetch_worker = FetchNameWorker(code)
+            self._fetch_worker.moveToThread(self._fetch_thread)
+            self._fetch_thread.started.connect(self._fetch_worker.run)
+            self._fetch_worker.finished.connect(self._on_name_fetched)
+            self._fetch_worker.finished.connect(self._fetch_thread.quit)
+            self._fetch_worker.finished.connect(self._fetch_worker.deleteLater)
+            self._fetch_thread.finished.connect(self._fetch_thread.deleteLater)
+            self._fetch_thread.start()
 
     def _on_name_fetched(self, code: str, name: str):
         self.btn_add.setEnabled(True)
+        self.combo_type.setEnabled(True)
         self.input_code.setPlaceholderText("输入股票代码，如 600519")
 
         if not name:
             name = code
 
-        new_item = {"code": code, "name": name}
+        new_item = {"code": code, "name": name, "type": "stock"}
+        self.stocks_config.append(new_item)
+        self._refresh_stock_list()
+
+    def _on_futures_name_fetched(self, code: str, name: str):
+        self.btn_add.setEnabled(True)
+        self.combo_type.setEnabled(True)
+        self.input_code.setPlaceholderText("输入期货代码，如 CU2409（沪铜2409）")
+
+        if not name:
+            name = code
+
+        new_item = {"code": code, "name": name, "type": "futures"}
         self.stocks_config.append(new_item)
         self._refresh_stock_list()
 
@@ -421,5 +512,9 @@ class SettingsDialog(QDialog):
         # 补充字段按定义顺序
         for key in SUPPLEMENTARY_FIELDS:
             if self._supp_cbs[key].isChecked():
+                fields.append(key)
+        # 期货字段
+        for key in FUTURES_FIELDS:
+            if self._futures_cbs[key].isChecked():
                 fields.append(key)
         return fields

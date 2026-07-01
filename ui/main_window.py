@@ -16,7 +16,10 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal
 from PyQt6.QtGui import QFont, QColor, QPainter, QPen, QAction, QIcon, QPixmap
 
-from data.fetcher import StockData, fetch_realtime, fetch_kline, fetch_intraday, fetch_supplementary
+from data.fetcher import (
+    StockData, fetch_realtime, fetch_kline, fetch_intraday, fetch_supplementary,
+    fetch_futures_realtime, fetch_futures_intraday,
+)
 from ui.stock_widget import StockRow, ALL_FIELD_SPECS, ALL_FIELD_WIDTH
 from ui.settings_dialog import SettingsDialog
 
@@ -153,9 +156,15 @@ class MainWindow(QMainWindow):
         return path if os.path.exists(path) else None
 
     def _init_stocks(self):
-        """初始化股票列表"""
+        """初始化品种列表（股票/期货）"""
+        from data.fetcher import fetch_futures_name
         for item in self.config.get("stocks", []):
-            self.stocks.append(StockData(item["code"], item.get("name", item["code"])))
+            inst_type = item.get("type", "stock")
+            name = item.get("name", item["code"])
+            if inst_type == "futures" and not name:
+                name = fetch_futures_name(item["code"])
+            sd = StockData(item["code"], name, inst_type)
+            self.stocks.append(sd)
 
     def _apply_window_flags(self):
         """根据配置应用窗口标志（置顶等）"""
@@ -174,7 +183,7 @@ class MainWindow(QMainWindow):
 
     def _setup_ui(self):
         """设置UI"""
-        self.setWindowTitle("股票监控")
+        self.setWindowTitle("行情监控")
         self._apply_window_flags()
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
@@ -210,7 +219,7 @@ class MainWindow(QMainWindow):
                 logo_label.setPixmap(pixmap)
         logo_label.setFixedSize(16, 16)
 
-        title_label = QLabel("股票监控")
+        title_label = QLabel("行情监控")
         title_label.setStyleSheet("color: #AAAAAA; font-size: 11px; font-weight: bold;")
         title_layout.addWidget(logo_label)
         title_layout.addSpacing(4)
@@ -333,7 +342,7 @@ class MainWindow(QMainWindow):
             icon = QIcon(pixmap)
 
         self.tray = QSystemTrayIcon(icon, self)
-        self.tray.setToolTip("股票监控")
+        self.tray.setToolTip("行情监控")
 
         menu = QMenu()
         menu.setStyleSheet("""
@@ -397,18 +406,24 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(500, self._refresh_supplementary)
 
     def _refresh_realtime(self):
-        """刷新所有股票的实时行情"""
+        """刷新所有品种的实时行情"""
         for stock in self.stocks:
-            fetch_realtime(stock)
+            if stock.instrument_type == "futures":
+                fetch_futures_realtime(stock)
+            else:
+                fetch_realtime(stock)
 
         # 更新UI
         for row in self.stock_rows:
             row.update_display()
 
     def _refresh_intraday(self):
-        """刷新所有股票的分时数据"""
+        """刷新所有品种的分时数据"""
         for stock in self.stocks:
-            fetch_intraday(stock)
+            if stock.instrument_type == "futures":
+                fetch_futures_intraday(stock)
+            else:
+                fetch_intraday(stock)
 
         for row in self.stock_rows:
             row.update_display()
@@ -422,15 +437,19 @@ class MainWindow(QMainWindow):
             row.update_display()
 
     def _load_all_intraday(self):
-        """加载所有股票的分时数据（首次）"""
+        """加载所有品种的分时数据（首次）"""
         for stock in self.stocks:
-            fetch_realtime(stock)
-            fetch_intraday(stock)
+            if stock.instrument_type == "futures":
+                fetch_futures_realtime(stock)
+                fetch_futures_intraday(stock)
+            else:
+                fetch_realtime(stock)
+                fetch_intraday(stock)
 
         for row in self.stock_rows:
             row.update_display()
 
-        # 首次加载补充数据
+        # 首次加载补充数据（仅股票）
         self._refresh_supplementary()
 
     def _open_settings(self):
@@ -478,7 +497,8 @@ class MainWindow(QMainWindow):
             self.timer_realtime.start(interval_ms)
 
     def _rebuild_stocks(self):
-        """根据配置重建股票列表"""
+        """根据配置重建品种列表"""
+        from data.fetcher import fetch_futures_name
         # 清除旧的
         for row in self.stock_rows:
             row.setParent(None)
@@ -488,7 +508,11 @@ class MainWindow(QMainWindow):
 
         # 重新初始化
         for item in self.config.get("stocks", []):
-            self.stocks.append(StockData(item["code"], item.get("name", item["code"])))
+            inst_type = item.get("type", "stock")
+            name = item.get("name", item["code"])
+            if inst_type == "futures" and not name:
+                name = fetch_futures_name(item["code"])
+            self.stocks.append(StockData(item["code"], name, inst_type))
 
         # 重建行
         display_fields = self.config.get("display_fields", ["price", "change_pct", "intraday"])
@@ -557,8 +581,18 @@ class MainWindow(QMainWindow):
         self.config["window_x"] = self.x()
         self.config["window_y"] = self.y()
         save_config(self.config)
+
+        # 停止所有定时器
+        self.timer_realtime.stop()
+        self.timer_intraday.stop()
+        self.timer_supplementary.stop()
+
+        # 隐藏托盘图标
         self.tray.hide()
+
+        # 彻底退出（强制终止进程，释放文件锁）
         QApplication.instance().quit()
+        os._exit(0)
 
     def mousePressEvent(self, event):
         """支持拖拽"""

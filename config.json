@@ -1,19 +1,33 @@
 {
     "stocks": [
         {
-            "code": "600875",
-            "name": "东方电气"
+            "code": "CU2609",
+            "name": "沪铜2609",
+            "type": "futures"
+        },
+        {
+            "code": "600519",
+            "name": "贵州茅台",
+            "type": "stock"
         }
     ],
     "refresh_interval": 5,
-    "window_x": 251,
-    "window_y": 733,
+    "window_x": 894,
+    "window_y": 275,
     "opacity": 0.9,
     "auto_start": true,
     "always_on_top": true,
     "display_fields": [
         "price",
         "change_pct",
-        "intraday"
+        "change",
+        "volume",
+        "turnover",
+        "high",
+        "low",
+        "intraday",
+        "volume_ratio",
+        "turnover_rate",
+        "open_interest"
     ]
 }
