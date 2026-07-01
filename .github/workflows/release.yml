@@ -1,0 +1,70 @@
+name: 自动发布
+
+on:
+  push:
+    tags:
+      - 'v*'  # 推送 v1.2.0、v1.3.0 等标签时触发
+
+permissions:
+  contents: write  # 允许创建 Release
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: 签出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 安装依赖
+        run: |
+          pip install -r requirements.txt -q
+
+      - name: 生成图标
+        run: |
+          python -c "from PIL import Image; img = Image.open('logo.png'); img.save('logo.ico', format='ICO', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])"
+
+      - name: 从标签提取版本号并写入 version.py
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"  # 去掉 v 前缀
+          echo "版本号: $TAG_VERSION"
+          echo "VERSION=$TAG_VERSION" >> $GITHUB_ENV
+          # 将标签版本号写入 version.py，确保 exe 内版本正确
+          echo '"""版本信息"""' > version.py
+          echo '' >> version.py
+          echo "__version__ = \"$TAG_VERSION\"" >> version.py
+          echo "GITHUB_REPO = \"D33MO/stock-watching\"" >> version.py
+          echo "GITHUB_RELEASES_URL = f\"https://github.com/{GITHUB_REPO}/releases\"" >> version.py
+          echo "GITHUB_API_URL = f\"https://api.github.com/repos/{GITHUB_REPO}/releases/latest\"" >> version.py
+
+      - name: 打包（PyInstaller）
+        run: |
+          pyinstaller --noconfirm "股票监控.spec"
+
+      - name: 准备发布文件
+        shell: bash
+        run: |
+          # 复制额外文件到 dist/
+          cp config.json dist/
+          cp logo.ico dist/ || true
+          cp logo.png dist/ || true
+          echo "dist/ 目录内容:"
+          ls -la dist/
+
+      - name: 创建 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "v${{ env.VERSION }}"
+          body: |
+            请查看 [CHANGELOG](https://github.com/${{ github.repository }}/commits/v${{ env.VERSION }}) 了解变更内容。
+            下载 `股票监控.exe` 即可直接运行。
+          files: |
+            dist/股票监控.exe
+            dist/config.json
+          fail_on_unmatched_files: false

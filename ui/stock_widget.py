@@ -45,6 +45,17 @@ CHANGE_COLORED_FIELDS = {"price", "change_pct", "change"}
 ALL_FIELD_WIDTH = 70  # 所有字段统一宽度
 
 
+def format_price(val: float) -> str:
+    """根据价格大小动态格式化，确保低价品种（如ETF）精度足够"""
+    if val <= 0:
+        return "--"
+    if val < 1:
+        return f"{val:.4f}"
+    if val < 10:
+        return f"{val:.3f}"
+    return f"{val:.2f}"
+
+
 def format_volume(val: int) -> str:
     """格式化成交量（手 → 万手/亿手）"""
     if val <= 0:
@@ -317,7 +328,7 @@ class StockRow(QWidget):
 
             if field_key == "price":
                 if s.current_price > 0:
-                    text = f"{s.current_price:.2f}"
+                    text = format_price(s.current_price)
                     color = up_color if s.change_pct >= 0 else dn_color if colored else neutral_color
                 else:
                     text = "--"
@@ -343,10 +354,10 @@ class StockRow(QWidget):
                 text = format_turnover(s.turnover)
 
             elif field_key == "high":
-                text = f"{s.high_price:.2f}" if s.high_price > 0 else "--"
+                text = format_price(s.high_price)
 
             elif field_key == "low":
-                text = f"{s.low_price:.2f}" if s.low_price > 0 else "--"
+                text = format_price(s.low_price)
 
             elif field_key == "volume_ratio":
                 text = f"{s.volume_ratio:.2f}" if s.volume_ratio > 0 else "--"

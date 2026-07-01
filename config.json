@@ -9,6 +9,11 @@
             "code": "600519",
             "name": "贵州茅台",
             "type": "stock"
+        },
+        {
+            "code": "159325",
+            "name": "半导体NF",
+            "type": "stock"
         }
     ],
     "refresh_interval": 5,
