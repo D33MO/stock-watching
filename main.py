@@ -33,12 +33,24 @@ def main():
     app.setFont(font)
 
     # 设置应用程序图标（优先使用 ico 格式，打包后 Windows 显示更清晰）
-    icon_ico = os.path.join(base_dir, "logo.ico")
-    icon_png = os.path.join(base_dir, "logo.png")
+    # 打包后优先从 sys._MEIPASS（exe 内部资源）查找
+    if getattr(sys, 'frozen', False):
+        resource_dir = sys._MEIPASS
+    else:
+        resource_dir = base_dir
+    icon_ico = os.path.join(resource_dir, "logo.ico")
+    icon_png = os.path.join(resource_dir, "logo.png")
+    # 兼容：也检查 exe 同目录（手动复制的情况）
+    fallback_ico = os.path.join(base_dir, "logo.ico")
+    fallback_png = os.path.join(base_dir, "logo.png")
     if os.path.exists(icon_ico):
         app.setWindowIcon(QIcon(icon_ico))
+    elif os.path.exists(fallback_ico):
+        app.setWindowIcon(QIcon(fallback_ico))
     elif os.path.exists(icon_png):
         app.setWindowIcon(QIcon(icon_png))
+    elif os.path.exists(fallback_png):
+        app.setWindowIcon(QIcon(fallback_png))
 
     # 设置应用信息
     app.setApplicationName("股票监控")

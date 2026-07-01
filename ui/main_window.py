@@ -149,6 +149,11 @@ class MainWindow(QMainWindow):
     def _get_logo_path():
         """获取 logo.png 的路径"""
         if getattr(sys, 'frozen', False):
+            # 打包后，优先从 exe 内部打包的资源中查找（sys._MEIPASS）
+            meipass_path = os.path.join(sys._MEIPASS, "logo.png")
+            if os.path.exists(meipass_path):
+                return meipass_path
+            # 兼容：如果 logo.png 在 exe 同目录（手动复制的情况）
             base_dir = os.path.dirname(sys.executable)
         else:
             base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
