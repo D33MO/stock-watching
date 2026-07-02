@@ -53,6 +53,8 @@ def load_config():
         "auto_start": False,
         "always_on_top": True,
         "transparent_bg": False,
+        "stock_name_color": "#E0E0E0",
+        "futures_name_color": "#FFAA00",
     }
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -349,8 +351,11 @@ class MainWindow(QMainWindow):
         self.stock_rows.clear()
 
         display_fields = self.config.get("display_fields", ["price", "change_pct", "intraday"])
+        stock_color = self.config.get("stock_name_color", "#E0E0E0")
+        futures_color = self.config.get("futures_name_color", "#FFAA00")
         for stock in self.stocks:
-            row = StockRow(stock, display_fields=display_fields)
+            row = StockRow(stock, display_fields=display_fields,
+                           stock_color=stock_color, futures_color=futures_color)
             row.clicked.connect(self._on_stock_clicked)
             self.stock_rows.append(row)
             self.stock_layout.addWidget(row)
@@ -535,6 +540,8 @@ class MainWindow(QMainWindow):
             always_on_top=self.config.get("always_on_top", True),
             transparent_bg=self.config.get("transparent_bg", False),
             display_fields=self.config.get("display_fields", ["price", "change_pct", "intraday"]),
+            stock_name_color=self.config.get("stock_name_color", "#E0E0E0"),
+            futures_name_color=self.config.get("futures_name_color", "#FFAA00"),
             parent=self
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
@@ -544,6 +551,8 @@ class MainWindow(QMainWindow):
             new_always_on_top = dialog.get_always_on_top()
             new_transparent_bg = dialog.get_transparent_bg()
             new_display_fields = dialog.get_display_fields()
+            new_stock_color = dialog.get_stock_name_color()
+            new_futures_color = dialog.get_futures_name_color()
 
             # 记录旧值用于比较
             old_always_on_top = self.config.get("always_on_top", True)
@@ -556,6 +565,8 @@ class MainWindow(QMainWindow):
             self.config["auto_start"] = new_auto_start
             self.config["always_on_top"] = new_always_on_top
             self.config["transparent_bg"] = new_transparent_bg
+            self.config["stock_name_color"] = new_stock_color
+            self.config["futures_name_color"] = new_futures_color
             save_config(self.config)
 
             # 应用开机自启动设置
@@ -598,8 +609,11 @@ class MainWindow(QMainWindow):
 
         # 重建行
         display_fields = self.config.get("display_fields", ["price", "change_pct", "intraday"])
+        stock_color = self.config.get("stock_name_color", "#E0E0E0")
+        futures_color = self.config.get("futures_name_color", "#FFAA00")
         for stock in self.stocks:
-            row = StockRow(stock, display_fields=display_fields)
+            row = StockRow(stock, display_fields=display_fields,
+                           stock_color=stock_color, futures_color=futures_color)
             row.clicked.connect(self._on_stock_clicked)
             self.stock_rows.append(row)
             self.stock_layout.addWidget(row)

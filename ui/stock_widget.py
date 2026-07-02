@@ -211,10 +211,13 @@ class StockRow(QWidget):
 
     clicked = pyqtSignal(str)  # 点击信号，传递股票代码
 
-    def __init__(self, stock_data: StockData, display_fields: list[str] = None, parent=None):
+    def __init__(self, stock_data: StockData, display_fields: list[str] = None,
+                 parent=None, stock_color="#E0E0E0", futures_color="#FFAA00"):
         super().__init__(parent)
         self.stock_data = stock_data
         self.display_fields = display_fields or ["price", "change_pct", "intraday"]
+        self.stock_color = stock_color
+        self.futures_color = futures_color
         self.field_labels: dict[str, QLabel] = {}  # field_key -> QLabel
         self.chart_widget: MiniIntradayChart | None = None
         self._setup_ui()
@@ -224,14 +227,10 @@ class StockRow(QWidget):
         layout.setContentsMargins(8, 3, 8, 3)
         layout.setSpacing(6)
 
-        # 品种名称（期货用橙色区分）
+        # 品种名称（支持自定义颜色）
         is_futures = self.stock_data.instrument_type == "futures"
         name_text = self.stock_data.name
-        if is_futures:
-            # 期货仅显示中文名称（如 "沪铜2409"）
-            name_color = "#FFAA00"
-        else:
-            name_color = "#E0E0E0"
+        name_color = self.futures_color if is_futures else self.stock_color
 
         self.label_name = QLabel(name_text)
         self.label_name.setFixedWidth(70)
@@ -257,8 +256,12 @@ class StockRow(QWidget):
 
         self.setFixedHeight(56)
 
-    def rebuild(self, display_fields: list[str]):
+    def rebuild(self, display_fields: list[str], stock_color=None, futures_color=None):
         """重建显示字段布局（设置保存后调用）"""
+        if stock_color is not None:
+            self.stock_color = stock_color
+        if futures_color is not None:
+            self.futures_color = futures_color
         self.display_fields = display_fields
         self.field_labels.clear()
         self.chart_widget = None
@@ -276,12 +279,9 @@ class StockRow(QWidget):
         new_layout.setContentsMargins(8, 3, 8, 3)
         new_layout.setSpacing(6)
 
-        # 重新添加名称（保持期货颜色）
+        # 重新添加名称（使用自定义颜色）
         is_futures = self.stock_data.instrument_type == "futures"
-        if is_futures:
-            name_color = "#FFAA00"
-        else:
-            name_color = "#E0E0E0"
+        name_color = self.futures_color if is_futures else self.stock_color
         self.label_name.setStyleSheet(f"color: {name_color}; font-size: 12px;")
         self.label_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         new_layout.addWidget(self.label_name)

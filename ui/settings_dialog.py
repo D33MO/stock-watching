@@ -5,10 +5,11 @@
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
     QPushButton, QListWidget, QComboBox, QGroupBox, QListWidgetItem,
-    QMessageBox, QAbstractItemView, QCheckBox, QWidget, QScrollArea, QFrame
+    QMessageBox, QAbstractItemView, QCheckBox, QWidget, QScrollArea, QFrame,
+    QColorDialog
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QThread, QObject, QTimer
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QColor
 
 from data.fetcher import fetch_stock_name, fetch_futures_name
 from ui.stock_widget import REALTIME_FIELDS, SUPPLEMENTARY_FIELDS, FUTURES_FIELDS
@@ -85,16 +86,19 @@ class SettingsDialog(QDialog):
     def __init__(self, stocks_config: list, refresh_interval: int,
                  auto_start: bool = False, always_on_top: bool = True,
                  transparent_bg: bool = False,
-                 display_fields: list[str] = None, parent=None):
+                 display_fields: list[str] = None, parent=None,
+                 stock_name_color="#E0E0E0", futures_name_color="#FFAA00"):
         super().__init__(parent)
         self.setWindowTitle("设置")
-        self.setFixedSize(420, 620)
+        self.setFixedSize(440, 680)
         self.stocks_config = list(stocks_config)
         self.refresh_interval = refresh_interval
         self.auto_start = auto_start
         self.always_on_top = always_on_top
         self.transparent_bg = transparent_bg
         self.display_fields = display_fields or ["price", "change_pct", "intraday"]
+        self.stock_name_color = stock_name_color
+        self.futures_name_color = futures_name_color
         self._setup_ui()
         QTimer.singleShot(0, self._check_update)
 
@@ -212,13 +216,19 @@ class SettingsDialog(QDialog):
         self._refresh_stock_list()
         stocks_layout.addWidget(self.stock_list, 1)
 
-        # 删除按钮
+        # 删除 + 排序按钮
         btn_layout = QHBoxLayout()
         btn_delete = QPushButton("删除选中")
         btn_delete.setObjectName("btn_delete")
         btn_delete.clicked.connect(self._delete_stock)
         btn_layout.addWidget(btn_delete)
         btn_layout.addStretch()
+        btn_up = QPushButton("上移")
+        btn_up.clicked.connect(self._move_up)
+        btn_layout.addWidget(btn_up)
+        btn_down = QPushButton("下移")
+        btn_down.clicked.connect(self._move_down)
+        btn_layout.addWidget(btn_down)
         stocks_layout.addLayout(btn_layout)
 
         group_stocks.setLayout(stocks_layout)
@@ -328,6 +338,41 @@ class SettingsDialog(QDialog):
 
         group_behavior.setLayout(behavior_layout)
         layout.addWidget(group_behavior)
+
+        # ===== 品种颜色 =====
+        group_colors = QGroupBox("品种颜色")
+        colors_layout = QVBoxLayout()
+
+        # 股票颜色
+        stock_color_row = QHBoxLayout()
+        stock_color_row.addWidget(QLabel("股票名称颜色:"))
+        self.btn_stock_color = QPushButton()
+        self.btn_stock_color.setFixedSize(32, 20)
+        self._set_color_button_style(self.btn_stock_color, self.stock_name_color)
+        self.btn_stock_color.clicked.connect(lambda: self._pick_color("stock"))
+        stock_color_row.addWidget(self.btn_stock_color)
+        self.label_stock_color_hex = QLabel(self.stock_name_color)
+        self.label_stock_color_hex.setStyleSheet("color: #AAAAAA; font-size: 11px;")
+        stock_color_row.addWidget(self.label_stock_color_hex)
+        stock_color_row.addStretch()
+        colors_layout.addLayout(stock_color_row)
+
+        # 期货颜色
+        futures_color_row = QHBoxLayout()
+        futures_color_row.addWidget(QLabel("期货名称颜色:"))
+        self.btn_futures_color = QPushButton()
+        self.btn_futures_color.setFixedSize(32, 20)
+        self._set_color_button_style(self.btn_futures_color, self.futures_name_color)
+        self.btn_futures_color.clicked.connect(lambda: self._pick_color("futures"))
+        futures_color_row.addWidget(self.btn_futures_color)
+        self.label_futures_color_hex = QLabel(self.futures_name_color)
+        self.label_futures_color_hex.setStyleSheet("color: #AAAAAA; font-size: 11px;")
+        futures_color_row.addWidget(self.label_futures_color_hex)
+        futures_color_row.addStretch()
+        colors_layout.addLayout(futures_color_row)
+
+        group_colors.setLayout(colors_layout)
+        layout.addWidget(group_colors)
 
         # 将设置内容放入滚动区域
         scroll.setWidget(scroll_content)
@@ -484,6 +529,118 @@ class SettingsDialog(QDialog):
         self.stocks_config.pop(row)
         self._refresh_stock_list()
 
+    def _move_up(self):
+        """上移选中品种"""
+        row = self.stock_list.currentRow()
+        if row <= 0:
+            return
+        self.stocks_config[row], self.stocks_config[row - 1] = \
+            self.stocks_config[row - 1], self.stocks_config[row]
+        self._refresh_stock_list()
+        self.stock_list.setCurrentRow(row - 1)
+
+    def _move_down(self):
+        """下移选中品种"""
+        row = self.stock_list.currentRow()
+        if row < 0 or row >= len(self.stocks_config) - 1:
+            return
+        self.stocks_config[row], self.stocks_config[row + 1] = \
+            self.stocks_config[row + 1], self.stocks_config[row]
+        self._refresh_stock_list()
+        self.stock_list.setCurrentRow(row + 1)
+
+    def _set_color_button_style(self, btn, color_hex):
+        """设置颜色按钮的样式"""
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {color_hex};
+                border: 1px solid #666;
+                border-radius: 3px;
+            }}
+        """)
+
+    def _pick_color(self, target):
+        """打开颜色选择器（简单预设颜色）"""
+        current = self.stock_name_color if target == "stock" else self.futures_name_color
+
+        # 预设颜色
+        presets = [
+            ("#E0E0E0", "浅灰"), ("#FFFFFF", "白色"), ("#CCCCCC", "中灰"),
+            ("#888888", "深灰"), ("#FFAA00", "橙色"), ("#FFD700", "金色"),
+            ("#FFDD44", "黄色"), ("#FF6666", "红色"), ("#FF88AA", "粉色"),
+            ("#88CCFF", "浅蓝"), ("#4488FF", "蓝色"), ("#88DD88", "浅绿"),
+            ("#44BB44", "绿色"), ("#88DDDD", "青色"), ("#DD88FF", "紫色"),
+        ]
+
+        # 创建简单选择弹窗
+        dialog = QDialog(self)
+        dialog.setWindowTitle("选择颜色")
+        dialog.setFixedSize(320, 200)
+
+        layout = QVBoxLayout(dialog)
+
+        grid = QGridLayout()
+        grid.setSpacing(6)
+        cols = 5
+        for i, (hex_color, label) in enumerate(presets):
+            btn = QPushButton()
+            btn.setFixedSize(48, 28)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {hex_color};
+                    border: 1px solid #666;
+                    border-radius: 4px;
+                }}
+                QPushButton:hover {{ border: 2px solid #FFF; }}
+            """)
+            btn.setToolTip(f"{label} ({hex_color})")
+            btn.clicked.connect(lambda checked, c=hex_color: self._on_color_picked(c, target, dialog))
+            grid.addWidget(btn, i // cols, i % cols)
+
+        layout.addLayout(grid)
+
+        # 底部按钮
+        bottom = QHBoxLayout()
+        bottom.addStretch()
+        btn_custom = QPushButton("自定义…")
+        btn_custom.clicked.connect(lambda: self._on_custom_color(target, dialog))
+        bottom.addWidget(btn_custom)
+        btn_cancel = QPushButton("取消")
+        btn_cancel.clicked.connect(dialog.reject)
+        bottom.addWidget(btn_cancel)
+        layout.addLayout(bottom)
+
+        dialog.exec()
+
+    def _on_color_picked(self, hex_color, target, dialog):
+        """选择预设颜色后的处理"""
+        if target == "stock":
+            self.stock_name_color = hex_color
+            self._set_color_button_style(self.btn_stock_color, hex_color)
+            self.label_stock_color_hex.setText(hex_color)
+        else:
+            self.futures_name_color = hex_color
+            self._set_color_button_style(self.btn_futures_color, hex_color)
+            self.label_futures_color_hex.setText(hex_color)
+        dialog.accept()
+
+    def _on_custom_color(self, target, dialog):
+        """打开系统颜色选择器（完整功能）"""
+        dialog.close()
+        current = self.stock_name_color if target == "stock" else self.futures_name_color
+        qcolor = QColor(current)
+        color = QColorDialog.getColor(qcolor, self)
+        if color.isValid():
+            hex_color = color.name()
+            if target == "stock":
+                self.stock_name_color = hex_color
+                self._set_color_button_style(self.btn_stock_color, hex_color)
+                self.label_stock_color_hex.setText(hex_color)
+            else:
+                self.futures_name_color = hex_color
+                self._set_color_button_style(self.btn_futures_color, hex_color)
+                self.label_futures_color_hex.setText(hex_color)
+
     def _save(self):
         """保存设置"""
         idx = self.combo_interval.currentIndex()
@@ -509,6 +666,12 @@ class SettingsDialog(QDialog):
 
     def get_transparent_bg(self):
         return self.transparent_bg
+
+    def get_stock_name_color(self):
+        return self.stock_name_color
+
+    def get_futures_name_color(self):
+        return self.futures_name_color
 
     def get_display_fields(self) -> list[str]:
         """获取用户勾选的显示字段列表（保持配置中的顺序）"""

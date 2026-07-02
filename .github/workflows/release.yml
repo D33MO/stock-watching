@@ -52,6 +52,7 @@ jobs:
             --add-data "config.json;." \
             --add-data "logo.ico;." \
             --add-data "logo.png;." \
+            --add-data "assets/svg;assets/svg" \
             --hidden-import akshare \
             --collect-data akshare \
             --hidden-import pyqtgraph \
