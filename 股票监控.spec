@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_data_files
 
-datas = [('config.json', '.'), ('logo.ico', '.'), ('logo.png', '.')]
+datas = [('config.json', '.'), ('logo.ico', '.'), ('logo.png', '.'), ('assets/svg', 'assets/svg')]
 datas += collect_data_files('akshare')
 
 

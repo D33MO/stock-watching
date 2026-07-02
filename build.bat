@@ -27,6 +27,7 @@ venv\Scripts\pyinstaller.exe --noconfirm --onefile --windowed ^
     --add-data "config.json;." ^
     --add-data "logo.ico;." ^
     --add-data "logo.png;." ^
+    --add-data "assets/svg;assets/svg" ^
     --hidden-import akshare ^
     --collect-data akshare ^
     --hidden-import pyqtgraph ^
@@ -46,6 +47,8 @@ echo [4/4] 复制配置文件...
 copy /Y config.json dist\config.json >nul
 copy /Y logo.ico dist\logo.ico >nul
 copy /Y logo.png dist\logo.png >nul
+if not exist dist\assets\svg mkdir dist\assets\svg
+copy /Y assets\svg\*.svg dist\assets\svg\ >nul
 
 echo.
 echo ====================================

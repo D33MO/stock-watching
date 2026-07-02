@@ -204,6 +204,11 @@ class MainWindow(QMainWindow):
     def _get_assets_dir():
         """获取 assets 目录路径"""
         if getattr(sys, 'frozen', False):
+            # 打包后，优先从 exe 内部的资源中查找（sys._MEIPASS）
+            meipass_path = os.path.join(sys._MEIPASS, "assets")
+            if os.path.exists(meipass_path):
+                return meipass_path
+            # 兼容：如果 assets 在 exe 同目录（手动复制的情况）
             base_dir = os.path.dirname(sys.executable)
         else:
             base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -275,18 +280,19 @@ class MainWindow(QMainWindow):
         title_layout.addStretch()
 
         # 设置按钮
-        btn_settings = QPushButton("⚙")
-        btn_settings.setFixedSize(20, 18)
-        btn_settings.setStyleSheet("""
+        self.btn_settings = QPushButton()
+        self.btn_settings.setFixedSize(20, 18)
+        self.btn_settings.setStyleSheet("""
             QPushButton {
-                color: #AAAAAA; font-size: 13px; font-weight: bold;
                 background: transparent; border: none;
             }
-            QPushButton:hover { color: #FFFFFF; }
         """)
-        btn_settings.setToolTip("设置")
-        btn_settings.clicked.connect(self._open_settings)
-        title_layout.addWidget(btn_settings)
+        self.btn_settings.setIcon(self._load_svg_icon("setting.svg", "#AAAAAA"))
+        self.btn_settings.setIconSize(self.btn_settings.size())
+        self.btn_settings.installEventFilter(self)
+        self.btn_settings.setToolTip("设置")
+        self.btn_settings.clicked.connect(self._open_settings)
+        title_layout.addWidget(self.btn_settings)
 
         # 置顶按钮
         self.btn_pin = QPushButton()
@@ -477,6 +483,7 @@ class MainWindow(QMainWindow):
         worker.finished.connect(lambda tid: self._on_refresh_finished(tid))
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.wait)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(lambda: self._workers.pop(task_id, None))
 
@@ -675,6 +682,28 @@ class MainWindow(QMainWindow):
         painter.end()
         return QIcon(pixmap)
 
+    def _load_svg_icon(self, svg_name: str, fill_color: str) -> QIcon:
+        """加载任意 SVG 图标，注入填充色并渲染为 QIcon"""
+        svg_path = os.path.join(self._get_assets_dir(), "svg", svg_name)
+        if not os.path.exists(svg_path):
+            return QIcon()
+
+        with open(svg_path, "r", encoding="utf-8") as f:
+            svg_data = f.read()
+
+        # 替换所有硬编码的 fill 属性
+        import re
+        svg_data = re.sub(r'fill="[^"]*"', f'fill="{fill_color}"', svg_data)
+        svg_data = re.sub(r'stroke="[^"]*"', 'stroke="none"', svg_data)
+
+        renderer = QSvgRenderer(QByteArray(svg_data.encode("utf-8")))
+        pixmap = QPixmap(18, 18)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        renderer.render(painter)
+        painter.end()
+        return QIcon(pixmap)
+
     def _update_pin_button_style(self):
         """更新置顶按钮图标和样式"""
         is_pinned = self.config.get("always_on_top", True)
@@ -702,11 +731,14 @@ class MainWindow(QMainWindow):
         self._update_pin_button_style()
 
     def eventFilter(self, obj, event):
-        """事件过滤器，处理 btn_pin 的 hover 效果"""
-        if obj is self.btn_pin:
+        """事件过滤器，处理按钮 hover 效果"""
+        # 用 getattr 避免按钮尚未创建时的访问错误
+        btn_pin = getattr(self, 'btn_pin', None)
+        btn_settings = getattr(self, 'btn_settings', None)
+
+        if obj is btn_pin:
             is_pinned = self.config.get("always_on_top", True)
             if event.type() == event.Type.Enter:
-                # 悬浮：使用更亮的颜色
                 if is_pinned:
                     icon = self._load_pin_icon(filled=True, color="#FFFFFF")
                 else:
@@ -714,13 +746,19 @@ class MainWindow(QMainWindow):
                 self.btn_pin.setIcon(icon)
                 self.btn_pin.setIconSize(self.btn_pin.size())
             elif event.type() == event.Type.Leave:
-                # 离开：恢复正常颜色
                 if is_pinned:
                     icon = self._load_pin_icon(filled=True, color="#E0E0E0")
                 else:
                     icon = self._load_pin_icon(filled=False, color="#666666")
                 self.btn_pin.setIcon(icon)
                 self.btn_pin.setIconSize(self.btn_pin.size())
+        elif obj is btn_settings:
+            if event.type() == event.Type.Enter:
+                self.btn_settings.setIcon(self._load_svg_icon("setting.svg", "#FFFFFF"))
+                self.btn_settings.setIconSize(self.btn_settings.size())
+            elif event.type() == event.Type.Leave:
+                self.btn_settings.setIcon(self._load_svg_icon("setting.svg", "#AAAAAA"))
+                self.btn_settings.setIconSize(self.btn_settings.size())
         return super().eventFilter(obj, event)
 
     def _quit(self):
