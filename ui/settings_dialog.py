@@ -84,6 +84,7 @@ class SettingsDialog(QDialog):
 
     def __init__(self, stocks_config: list, refresh_interval: int,
                  auto_start: bool = False, always_on_top: bool = True,
+                 transparent_bg: bool = False,
                  display_fields: list[str] = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("设置")
@@ -92,6 +93,7 @@ class SettingsDialog(QDialog):
         self.refresh_interval = refresh_interval
         self.auto_start = auto_start
         self.always_on_top = always_on_top
+        self.transparent_bg = transparent_bg
         self.display_fields = display_fields or ["price", "change_pct", "intraday"]
         self._setup_ui()
         QTimer.singleShot(0, self._check_update)
@@ -319,6 +321,11 @@ class SettingsDialog(QDialog):
         self.cb_always_on_top.setToolTip("窗口始终显示在其他窗口之上")
         behavior_layout.addWidget(self.cb_always_on_top)
 
+        self.cb_transparent_bg = QCheckBox("窗口背景透明")
+        self.cb_transparent_bg.setChecked(self.transparent_bg)
+        self.cb_transparent_bg.setToolTip("主窗口内容区域背景透明，仅显示文字和图表")
+        behavior_layout.addWidget(self.cb_transparent_bg)
+
         group_behavior.setLayout(behavior_layout)
         layout.addWidget(group_behavior)
 
@@ -483,6 +490,7 @@ class SettingsDialog(QDialog):
         self.refresh_interval = self.interval_values[idx]
         self.auto_start = self.cb_auto_start.isChecked()
         self.always_on_top = self.cb_always_on_top.isChecked()
+        self.transparent_bg = self.cb_transparent_bg.isChecked()
         self.display_fields = self.get_display_fields()
         self.settings_changed.emit()
         self.accept()
@@ -498,6 +506,9 @@ class SettingsDialog(QDialog):
 
     def get_always_on_top(self):
         return self.always_on_top
+
+    def get_transparent_bg(self):
+        return self.transparent_bg
 
     def get_display_fields(self) -> list[str]:
         """获取用户勾选的显示字段列表（保持配置中的顺序）"""

@@ -7,14 +7,16 @@ import json
 import os
 import sys
 import winreg
+from concurrent.futures import ThreadPoolExecutor
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QSystemTrayIcon, QMenu, QApplication,
     QMessageBox, QInputDialog, QDialog, QLineEdit,
     QPushButton, QDialogButtonBox
 )
-from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, QByteArray, QObject, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QColor, QPainter, QPen, QAction, QIcon, QPixmap
+from PyQt6.QtSvg import QSvgRenderer
 
 from data.fetcher import (
     StockData, fetch_realtime, fetch_kline, fetch_intraday, fetch_supplementary,
@@ -50,6 +52,7 @@ def load_config():
         "opacity": 0.9,
         "auto_start": False,
         "always_on_top": True,
+        "transparent_bg": False,
     }
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -122,6 +125,42 @@ def is_auto_start_enabled() -> bool:
         return False
 
 
+class RefreshWorker(QObject):
+    """后台刷新数据的工作线程，内部并行请求所有品种"""
+    finished = pyqtSignal(str)  # task_id
+
+    def __init__(self, stocks: list, task_id: str,
+                 do_realtime=False, do_intraday=False, do_supplementary=False):
+        super().__init__()
+        self.stocks = stocks
+        self.task_id = task_id
+        self.do_realtime = do_realtime
+        self.do_intraday = do_intraday
+        self.do_supplementary = do_supplementary
+
+    def run(self):
+        """在后台线程中执行，并行请求所有品种数据"""
+        with ThreadPoolExecutor(max_workers=min(8, len(self.stocks) or 1)) as executor:
+            futures = []
+            for stock in self.stocks:
+                if self.do_realtime:
+                    if stock.instrument_type == "futures":
+                        futures.append(executor.submit(fetch_futures_realtime, stock))
+                    else:
+                        futures.append(executor.submit(fetch_realtime, stock))
+                if self.do_intraday:
+                    if stock.instrument_type == "futures":
+                        futures.append(executor.submit(fetch_futures_intraday, stock))
+                    else:
+                        futures.append(executor.submit(fetch_intraday, stock))
+            if self.do_supplementary:
+                futures.append(executor.submit(fetch_supplementary, self.stocks))
+            # 等待所有请求完成
+            for f in futures:
+                f.result()
+        self.finished.emit(self.task_id)
+
+
 class MainWindow(QMainWindow):
     """主悬浮窗"""
 
@@ -131,6 +170,7 @@ class MainWindow(QMainWindow):
         self.stocks: list[StockData] = []
         self.stock_rows: list[StockRow] = []
         self._drag_pos = None
+        self._workers: dict[str, tuple] = {}  # task_id -> (thread, worker)
 
         self._init_stocks()
         self._setup_ui()
@@ -159,6 +199,15 @@ class MainWindow(QMainWindow):
             base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         path = os.path.join(base_dir, "logo.png")
         return path if os.path.exists(path) else None
+
+    @staticmethod
+    def _get_assets_dir():
+        """获取 assets 目录路径"""
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(base_dir, "assets")
 
     def _init_stocks(self):
         """初始化品种列表（股票/期货）"""
@@ -194,13 +243,7 @@ class MainWindow(QMainWindow):
 
         # 主容器
         self.central_widget = QWidget()
-        self.central_widget.setStyleSheet("""
-            QWidget#container {
-                background-color: rgba(30, 30, 30, 230);
-                border: 1px solid #444;
-                border-radius: 6px;
-            }
-        """)
+        self._apply_container_style()
         self.central_widget.setObjectName("container")
 
         main_layout = QVBoxLayout(self.central_widget)
@@ -208,10 +251,10 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(0)
 
         # 标题栏
-        title_bar = QWidget()
-        title_bar.setFixedHeight(24)
-        title_bar.setStyleSheet("background-color: rgba(40, 40, 40, 230); border-radius: 6px;")
-        title_layout = QHBoxLayout(title_bar)
+        self.title_bar = QWidget()
+        self.title_bar.setFixedHeight(24)
+        self._apply_title_bar_style()
+        title_layout = QHBoxLayout(self.title_bar)
         title_layout.setContentsMargins(8, 0, 4, 0)
 
         # 标题图标
@@ -246,8 +289,10 @@ class MainWindow(QMainWindow):
         title_layout.addWidget(btn_settings)
 
         # 置顶按钮
-        self.btn_pin = QPushButton("📌")
+        self.btn_pin = QPushButton()
         self.btn_pin.setFixedSize(20, 18)
+        self.btn_pin.setToolTip("已置顶 - 点击取消")
+        self.btn_pin.installEventFilter(self)
         self._update_pin_button_style()
         self.btn_pin.clicked.connect(self._toggle_pin)
         title_layout.addWidget(self.btn_pin)
@@ -266,7 +311,7 @@ class MainWindow(QMainWindow):
         btn_close.clicked.connect(self.close)
         title_layout.addWidget(btn_close)
 
-        main_layout.addWidget(title_bar)
+        main_layout.addWidget(self.title_bar)
 
         # 分隔线
         sep = QWidget()
@@ -410,52 +455,69 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(100, self._refresh_realtime)
         QTimer.singleShot(500, self._refresh_supplementary)
 
-    def _refresh_realtime(self):
-        """刷新所有品种的实时行情"""
-        for stock in self.stocks:
-            if stock.instrument_type == "futures":
-                fetch_futures_realtime(stock)
-            else:
-                fetch_realtime(stock)
-
-        # 更新UI
-        for row in self.stock_rows:
-            row.update_display()
-
-    def _refresh_intraday(self):
-        """刷新所有品种的分时数据"""
-        for stock in self.stocks:
-            if stock.instrument_type == "futures":
-                fetch_futures_intraday(stock)
-            else:
-                fetch_intraday(stock)
-
-        for row in self.stock_rows:
-            row.update_display()
-
-    def _refresh_supplementary(self):
-        """刷新补充数据（量比、换手率等，每3分钟）"""
+    def _start_refresh(self, task_id: str, do_realtime=False, do_intraday=False, do_supplementary=False):
+        """在后台线程中刷新数据，完成后自动更新 UI"""
         if not self.stocks:
             return
-        fetch_supplementary(self.stocks)
-        for row in self.stock_rows:
-            row.update_display()
+
+        # 如果同类型 worker 还在运行，跳过本次刷新
+        if task_id in self._workers:
+            return
+
+        thread = QThread(self)
+        worker = RefreshWorker(
+            stocks=self.stocks,
+            task_id=task_id,
+            do_realtime=do_realtime,
+            do_intraday=do_intraday,
+            do_supplementary=do_supplementary,
+        )
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(lambda tid: self._on_refresh_finished(tid))
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._workers.pop(task_id, None))
+
+        self._workers[task_id] = (thread, worker)
+        thread.start()
+
+    def _on_refresh_finished(self, task_id: str):
+        """后台刷新完成，在主线程更新 UI"""
+        if task_id in ("realtime", "load_all"):
+            # 实时数据或首次加载完成 → 更新所有行
+            for row in self.stock_rows:
+                row.update_display()
+        elif task_id == "intraday":
+            # 分时数据更新完成
+            for row in self.stock_rows:
+                row.update_display()
+        elif task_id == "supplementary":
+            # 补充数据更新完成
+            for row in self.stock_rows:
+                row.update_display()
+
+    def _refresh_realtime(self):
+        """刷新所有品种的实时行情（后台并行）"""
+        self._start_refresh(task_id="realtime", do_realtime=True)
+
+    def _refresh_intraday(self):
+        """刷新所有品种的分时数据（后台并行）"""
+        self._start_refresh(task_id="intraday", do_intraday=True)
+
+    def _refresh_supplementary(self):
+        """刷新补充数据（量比、换手率等，后台并行）"""
+        if not self.stocks:
+            return
+        self._start_refresh(task_id="supplementary", do_supplementary=True)
 
     def _load_all_intraday(self):
-        """加载所有品种的分时数据（首次）"""
-        for stock in self.stocks:
-            if stock.instrument_type == "futures":
-                fetch_futures_realtime(stock)
-                fetch_futures_intraday(stock)
-            else:
-                fetch_realtime(stock)
-                fetch_intraday(stock)
-
-        for row in self.stock_rows:
-            row.update_display()
-
-        # 首次加载补充数据（仅股票）
-        self._refresh_supplementary()
+        """加载所有品种的分时数据（首次，后台并行）"""
+        self._start_refresh(task_id="load_all", do_realtime=True, do_intraday=True)
+        # 首次加载补充数据（延迟启动，等实时数据先回来）
+        QTimer.singleShot(3000, lambda: self._start_refresh(
+            task_id="supp_first", do_supplementary=True))
 
     def _open_settings(self):
         """打开设置窗口"""
@@ -464,6 +526,7 @@ class MainWindow(QMainWindow):
             refresh_interval=self.config.get("refresh_interval", 5),
             auto_start=self.config.get("auto_start", False),
             always_on_top=self.config.get("always_on_top", True),
+            transparent_bg=self.config.get("transparent_bg", False),
             display_fields=self.config.get("display_fields", ["price", "change_pct", "intraday"]),
             parent=self
         )
@@ -472,6 +535,7 @@ class MainWindow(QMainWindow):
             new_interval = dialog.get_refresh_interval()
             new_auto_start = dialog.get_auto_start()
             new_always_on_top = dialog.get_always_on_top()
+            new_transparent_bg = dialog.get_transparent_bg()
             new_display_fields = dialog.get_display_fields()
 
             # 记录旧值用于比较
@@ -484,6 +548,7 @@ class MainWindow(QMainWindow):
             self.config["refresh_interval"] = new_interval
             self.config["auto_start"] = new_auto_start
             self.config["always_on_top"] = new_always_on_top
+            self.config["transparent_bg"] = new_transparent_bg
             save_config(self.config)
 
             # 应用开机自启动设置
@@ -493,6 +558,11 @@ class MainWindow(QMainWindow):
             if new_always_on_top != old_always_on_top:
                 self._apply_window_flags()
                 self.show()
+
+            # 应用透明背景设置
+            self._apply_container_style()
+            self._apply_title_bar_style()
+            self.update()  # 触发重绘 paintEvent
 
             # 重建股票列表
             self._rebuild_stocks()
@@ -551,26 +621,77 @@ class MainWindow(QMainWindow):
         # 可以扩展：点击后显示详细信息等
         pass
 
-    def _update_pin_button_style(self):
-        """更新置顶按钮样式"""
-        is_pinned = self.config.get("always_on_top", True)
-        if is_pinned:
-            self.btn_pin.setStyleSheet("""
-                QPushButton {
-                    color: #FFD700; font-size: 11px;
-                    background: transparent; border: none;
+    def _apply_container_style(self):
+        """根据 transparent_bg 设置容器背景样式"""
+        is_transparent = self.config.get("transparent_bg", False)
+        if is_transparent:
+            self.central_widget.setStyleSheet("""
+                QWidget#container {
+                    background-color: transparent;
+                    border: 1px solid #444;
+                    border-radius: 6px;
                 }
-                QPushButton:hover { color: #FFA500; }
             """)
+        else:
+            self.central_widget.setStyleSheet("""
+                QWidget#container {
+                    background-color: rgba(30, 30, 30, 230);
+                    border: 1px solid #444;
+                    border-radius: 6px;
+                }
+            """)
+
+    def _apply_title_bar_style(self):
+        """根据 transparent_bg 设置标题栏背景样式"""
+        if self.config.get("transparent_bg", False):
+            self.title_bar.setStyleSheet("background-color: transparent; border-radius: 6px;")
+        else:
+            self.title_bar.setStyleSheet("background-color: rgba(40, 40, 40, 230); border-radius: 6px;")
+
+    def _load_pin_icon(self, filled: bool, color: str) -> QIcon:
+        """加载 SVG pin 图标并渲染为 QIcon"""
+        svg_name = "pin-fill.svg" if filled else "pin.svg"
+        svg_path = os.path.join(self._get_assets_dir(), "svg", svg_name)
+        if not os.path.exists(svg_path):
+            # 回退：用 emoji 文本
+            pixmap = QPixmap(18, 18)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            return QIcon(pixmap)
+
+        with open(svg_path, "r", encoding="utf-8") as f:
+            svg_data = f.read()
+
+        # 在 <path> 中注入 fill/stroke 颜色
+        if filled:
+            svg_data = svg_data.replace("<path", f'<path fill="{color}" stroke="none"')
+        else:
+            svg_data = svg_data.replace("<path", f'<path fill="none" stroke="{color}" stroke-width="80"')
+
+        renderer = QSvgRenderer(QByteArray(svg_data.encode("utf-8")))
+        pixmap = QPixmap(18, 18)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        renderer.render(painter)
+        painter.end()
+        return QIcon(pixmap)
+
+    def _update_pin_button_style(self):
+        """更新置顶按钮图标和样式"""
+        is_pinned = self.config.get("always_on_top", True)
+        self.btn_pin.setStyleSheet("""
+            QPushButton {
+                background: transparent; border: none;
+            }
+        """)
+        if is_pinned:
+            icon = self._load_pin_icon(filled=True, color="#E0E0E0")
+            self.btn_pin.setIcon(icon)
+            self.btn_pin.setIconSize(self.btn_pin.size())
             self.btn_pin.setToolTip("已置顶 - 点击取消")
         else:
-            self.btn_pin.setStyleSheet("""
-                QPushButton {
-                    color: #666666; font-size: 11px;
-                    background: transparent; border: none;
-                }
-                QPushButton:hover { color: #FFFFFF; }
-            """)
+            icon = self._load_pin_icon(filled=False, color="#666666")
+            self.btn_pin.setIcon(icon)
+            self.btn_pin.setIconSize(self.btn_pin.size())
             self.btn_pin.setToolTip("未置顶 - 点击置顶")
 
     def _toggle_pin(self):
@@ -579,6 +700,28 @@ class MainWindow(QMainWindow):
         save_config(self.config)
         self._apply_window_flags()
         self._update_pin_button_style()
+
+    def eventFilter(self, obj, event):
+        """事件过滤器，处理 btn_pin 的 hover 效果"""
+        if obj is self.btn_pin:
+            is_pinned = self.config.get("always_on_top", True)
+            if event.type() == event.Type.Enter:
+                # 悬浮：使用更亮的颜色
+                if is_pinned:
+                    icon = self._load_pin_icon(filled=True, color="#FFFFFF")
+                else:
+                    icon = self._load_pin_icon(filled=False, color="#AAAAAA")
+                self.btn_pin.setIcon(icon)
+                self.btn_pin.setIconSize(self.btn_pin.size())
+            elif event.type() == event.Type.Leave:
+                # 离开：恢复正常颜色
+                if is_pinned:
+                    icon = self._load_pin_icon(filled=True, color="#E0E0E0")
+                else:
+                    icon = self._load_pin_icon(filled=False, color="#666666")
+                self.btn_pin.setIcon(icon)
+                self.btn_pin.setIconSize(self.btn_pin.size())
+        return super().eventFilter(obj, event)
 
     def _quit(self):
         """退出程序"""
@@ -664,12 +807,18 @@ class MainWindow(QMainWindow):
         self._create_stock_rows()
 
     def paintEvent(self, event):
-        """绘制半透明背景"""
+        """绘制窗口背景（半透明或透明模式）"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # 绘制圆角矩形背景
-        painter.setBrush(QColor(30, 30, 30, 230))
-        painter.setPen(QPen(QColor(80, 80, 80), 1))
-        painter.drawRoundedRect(self.rect(), 6, 6)
+        if self.config.get("transparent_bg", False):
+            # 透明模式：仅绘制细边框，不填充背景
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(80, 80, 80), 1))
+            painter.drawRoundedRect(self.rect(), 6, 6)
+        else:
+            # 默认半透明模式：绘制圆角矩形背景
+            painter.setBrush(QColor(30, 30, 30, 230))
+            painter.setPen(QPen(QColor(80, 80, 80), 1))
+            painter.drawRoundedRect(self.rect(), 6, 6)
         painter.end()

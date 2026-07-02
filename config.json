@@ -17,22 +17,15 @@
         }
     ],
     "refresh_interval": 5,
-    "window_x": 894,
-    "window_y": 275,
+    "window_x": 1342,
+    "window_y": 824,
     "opacity": 0.9,
-    "auto_start": true,
+    "auto_start": false,
     "always_on_top": true,
     "display_fields": [
         "price",
         "change_pct",
-        "change",
-        "volume",
-        "turnover",
-        "high",
-        "low",
-        "intraday",
-        "volume_ratio",
-        "turnover_rate",
-        "open_interest"
-    ]
+        "intraday"
+    ],
+    "transparent_bg": true
 }
